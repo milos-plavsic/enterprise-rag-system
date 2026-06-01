@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"/><title>Enterprise RAG</title></head>
+<body style="font-family:system-ui;max-width:800px;margin:2rem auto">
+<h1>Enterprise RAG (RBAC)</h1>
+<label>User <select id="user"><option>alice</option><option>bob</option><option>charlie</option></select></label>
+<textarea id="q" rows="3" style="width:100%">What is total EMEA revenue?</textarea>
+<button id="ask">Query</button>
+<pre id="out"></pre>
+<script>
+const b=location.origin.replace(/\/ui\/?$/,'');
+document.getElementById('ask').onclick=async()=>{
+  const body={user_id:document.getElementById('user').value,query:document.getElementById('q').value};
+  const r=await fetch(b+'/v1/query',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  document.getElementById('out').textContent=JSON.stringify(await r.json(),null,2);
+};
+</script>
+</body>
+</html>

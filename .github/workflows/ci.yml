@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          pip install "ml-core @ git+https://github.com/milos-plavsic/ml-core.git@v1.0.0"
+          pip install "agent-core @ git+https://github.com/milos-plavsic/agent-core.git@v1.2.1"
+          pip install -r requirements.txt
+          pip install "python-multipart>=0.0.9"
+          pip install "huggingface-hub>=0.15.0,<0.26.0"
+          pip install "langgraph==0.0.32" "langchain-core==0.1.45" --force-reinstall
+      - run: python synthetic_data.py
+      - run: python -m pytest tests/ -q
