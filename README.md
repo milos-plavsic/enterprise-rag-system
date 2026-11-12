@@ -61,6 +61,17 @@ GET /health is public. Protected routes are POST /v1/query and
 POST /v1/documents/upload. The previous user_id request parameter and
 GET /v1/users endpoint are intentionally removed.
 
+## Enterprise OIDC verification (optional)
+
+Instead of RAG_API_TOKENS_JSON, configure RAG_OIDC_JWKS_URL (HTTPS),
+RAG_OIDC_ISSUER and RAG_OIDC_AUDIENCE for an identity provider that signs
+RS256 JWTs. The signed claim named enterprise_role must be analyst, manager
+or auditor (override RAG_OIDC_ROLE_CLAIM only with a trusted issuer contract).
+The verifier checks signature, expiry, issue time, audience, issuer and subject.
+Do not configure local demo tokens and OIDC at the same time.
+Real enterprise IdP onboarding, group mappings, consent, revocation and
+operational assurance remain external validation requirements.
+
 ## Optional dense retrieval
 
     python -m pip install -r requirements-ml.txt
