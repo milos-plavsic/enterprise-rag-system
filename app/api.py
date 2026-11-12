@@ -75,9 +75,10 @@ def query(body: QueryRequest, identity: Identity = Depends(authenticated)) -> di
         return rag.query(body.query, identity)
     except PermissionError:
         raise HTTPException(status_code=403, detail="requested source not permitted")
-    except InsufficientEvidence as exc:
-        return {"status": "abstained", "answer": str(exc), "citations": [], "evidence": [],
-                "confidence": None}
+    except InsufficientEvidence:
+        return {"status": "abstained",
+                "answer": "The requested operation is unsupported or insufficiently specified.",
+                "citations": [], "evidence": [], "confidence": None}
     except ModelResponseError:
         raise HTTPException(status_code=502, detail="model response rejected")
     except ValueError:
@@ -97,8 +98,8 @@ async def upload_document(file: UploadFile = File(...), identity: Identity = Dep
         payload = await file.read(MAX_UPLOAD_BYTES + 1)
         rag = backend()
         return rag.upload(payload, extension, identity.role)
-    except InvalidDocument as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    except InvalidDocument:
+        raise HTTPException(status_code=400, detail="invalid or unsupported document")
     except Exception:
         log.exception("document upload failure")
         raise HTTPException(status_code=503, detail="upload unavailable")
