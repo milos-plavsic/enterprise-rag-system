@@ -88,7 +88,7 @@ async def upload_document(file: UploadFile = File(...), identity: Identity = Dep
         raise HTTPException(status_code=415, detail="only PDF and UTF-8 text are accepted")
     try:
         payload = await file.read(MAX_UPLOAD_BYTES + 1)
-        rag, _ = backend()
+        rag = backend()
         return rag.upload(payload, extension, identity.role)
     except InvalidDocument as exc:
         raise HTTPException(status_code=400, detail=str(exc))
