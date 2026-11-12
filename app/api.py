@@ -9,7 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
-from rag_service import EnterpriseRAG, Identity, TokenAuthenticator, InvalidDocument, InsufficientEvidence, MAX_UPLOAD_BYTES
+from rag_service import EnterpriseRAG, Identity, TokenAuthenticator, InvalidDocument, InsufficientEvidence, ModelResponseError, MAX_UPLOAD_BYTES
 from auth_oidc import OIDCAuthenticator
 
 log = logging.getLogger("enterprise_rag.api")
@@ -78,6 +78,8 @@ def query(body: QueryRequest, identity: Identity = Depends(authenticated)) -> di
     except InsufficientEvidence as exc:
         return {"status": "abstained", "answer": str(exc), "citations": [], "evidence": [],
                 "confidence": None}
+    except ModelResponseError:
+        raise HTTPException(status_code=502, detail="model response rejected")
     except ValueError:
         raise HTTPException(status_code=400, detail="invalid query")
     except Exception:
