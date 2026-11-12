@@ -23,9 +23,10 @@ responses are all untrusted inputs.
 
 ## Missing production security controls
 
-- This is opaque-token demo identity, NOT OIDC/SSO, MFA, ABAC or a credential
-  revocation platform. Real clients require validated enterprise identity and
-  central server-side authorisation.
+- Demo opaque tokens can be replaced by the optional pinned OIDC RS256/JWKS
+  verifier, which validates issuer, audience, time claims and role claim.
+  Real IdP integration, group-role governance, revocation, MFA, SSO policy
+  and lifecycle testing are not provided by this repository.
 - Current roles are coarse; tenancy and row-level permissions are not present.
 - PDF extraction is in-process: untrusted uploads require isolated processing,
   malware scanning and limits on CPU/memory beyond these Python checks.
