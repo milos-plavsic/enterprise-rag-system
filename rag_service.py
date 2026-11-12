@@ -126,7 +126,9 @@ def extract_pages(data: bytes, extension: str) -> list[str]:
             decoded = data.decode("utf-8")
         except UnicodeError as exc:
             raise InvalidDocument("text must be valid UTF-8") from exc
-        return [decoded[:MAX_EXTRACTED_CHARS]]
+        if len(decoded) > MAX_EXTRACTED_CHARS:
+            raise InvalidDocument("extracted content exceeds limit")
+        return [decoded]
     if extension != ".pdf" or not data.startswith(b"%PDF-"):
         raise InvalidDocument("only genuine PDFs and UTF-8 text are accepted")
     try:
@@ -207,15 +209,17 @@ class DocumentIndex:
         permitted_terms = [self._terms[i] for i in candidate_indices]
         bm25 = BM25Okapi(permitted_terms)
         local_scores = bm25.get_scores(tokens(query))
+        scores_by_index = {
+            original_index: float(local_scores[local_index])
+            for local_index, original_index in enumerate(candidate_indices)
+        }
+        query_terms = set(tokens(query))
         lexical = sorted(
             (
                 original_index for local_index, original_index in enumerate(candidate_indices)
-                if set(tokens(query)) & set(permitted_terms[local_index])
+                if query_terms & set(permitted_terms[local_index])
             ),
-            key=lambda i: (
-                -float(local_scores[candidate_indices.index(i)]),
-                self.chunks[i].id,
-            ),
+            key=lambda i: (-scores_by_index[i], self.chunks[i].id),
         )
         rankings = [lexical] if lexical else []
         if self._vectors is not None:
