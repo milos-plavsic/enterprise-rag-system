@@ -205,3 +205,27 @@ def test_known_and_unknown_regions_cannot_be_silently_combined(client):
         json={"query":"Total revenue for South America and EMEA"}).json()
     assert response["status"]=="abstained"
     assert "$75,000" not in response["answer"]
+
+
+def test_uploaded_pdf_is_parsed_indexed_and_persistent(client,environment):
+    from io import BytesIO
+    from reportlab.pdfgen import canvas
+    stream=BytesIO()
+    page=canvas.Canvas(stream)
+    page.drawString(40,740,"ZebraProtocol requires quarterly audit attestation.")
+    page.save()
+    response=client.post("/v1/documents/upload",headers=auth("manager"),
+        files={"file":("external.pdf",stream.getvalue(),"application/pdf")})
+    assert response.status_code==201
+    source=response.json()["source_id"]
+    from rag_service import EnterpriseRAG
+    again=EnterpriseRAG(environment)
+    manager=again.search_documents("ZebraProtocol","manager")
+    assert any(row["source"]==source and row["page"]==1 for row in manager)
+    analyst=again.search_documents("ZebraProtocol","analyst")
+    assert all(row["source"]!=source for row in analyst)
+
+def test_corrupted_magic_pdf_is_rejected(client):
+    result=client.post("/v1/documents/upload",headers=auth("manager"),
+        files={"file":("broken.pdf",b"%PDF-1.7\nnot actually a PDF","application/pdf")})
+    assert result.status_code==400
