@@ -1,0 +1,39 @@
+# Security model and explicit limitations
+
+Assets include documents, SQL rows, logs, role data, upload files, model prompts
+and secrets. The client request, uploaded material, retrieved content and model
+responses are all untrusted inputs.
+
+## Implemented controls
+
+- All privileged routes use server-configured opaque bearer credentials.
+  Callers cannot choose their own subject or role.
+- At least 32-character tokens are checked with SHA-256 and constant-time
+  digest comparison. Tokens are not intentionally written to request logs.
+- Per-subject local quota of 30 protected requests per minute.
+- File uploads require manager identity and accept only PDF and UTF-8 text.
+  Generated filenames avoid traversal. Size, page count, extracted text,
+  per-instance document count and total chunk count are bounded.
+- No user-controlled SQL strings; fixed parameterized SQL only.
+- Source permissions are applied before retrieval ranking, and source
+  identities are not reconstructed from filtered list offsets.
+- Optional model has bounded input/output, no tools, approved endpoint
+  scheme and validated JSON citation IDs.
+- UI renders server data with textContent, not innerHTML.
+
+## Missing production security controls
+
+- This is opaque-token demo identity, NOT OIDC/SSO, MFA, ABAC or a credential
+  revocation platform. Real clients require validated enterprise identity and
+  central server-side authorisation.
+- Current roles are coarse; tenancy and row-level permissions are not present.
+- PDF extraction is in-process: untrusted uploads require isolated processing,
+  malware scanning and limits on CPU/memory beyond these Python checks.
+- Local rate limiting does not work across distributed workers or hosts.
+- No production ingress TLS configuration, secrets manager, SIEM, audit-event
+  integrity service, DLP review or external penetration testing is included.
+- Source membership is not equivalent to truthful content or model faithfulness.
+- Prompt injection and malicious documents may affect optional synthesis.
+- A security assessment is required before using real customer data.
+
+Relevant references: OWASP ASVS 5.0 file handling and OWASP LLM Top 10 2025.
