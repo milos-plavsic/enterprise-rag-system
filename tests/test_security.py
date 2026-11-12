@@ -198,3 +198,10 @@ def test_oversized_utf8_document_rejected():
     from rag_service import extract_pages, InvalidDocument, MAX_EXTRACTED_CHARS
     with pytest.raises(InvalidDocument):
         extract_pages(("x"*(MAX_EXTRACTED_CHARS+1)).encode(),".txt")
+
+
+def test_known_and_unknown_regions_cannot_be_silently_combined(client):
+    response=client.post("/v1/query",headers=auth("analyst"),
+        json={"query":"Total revenue for South America and EMEA"}).json()
+    assert response["status"]=="abstained"
+    assert "$75,000" not in response["answer"]
