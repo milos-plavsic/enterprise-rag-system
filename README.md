@@ -1,233 +1,106 @@
-# Enterprise RAG Assistant with RBAC
+# Permission-Aware Enterprise Retrieval (experimental v2)
 
-A production-ready retrieval-augmented generation (RAG) system with role-based access control (RBAC), demonstrating secure multi-source enterprise data retrieval.
+Python demonstration of authenticated, permission-filtered retrieval over actual
+PDF text, SQLite transactions and JSON logs. Optional sentence-transformer
+embeddings and OpenAI-compatible citation-constrained synthesis are supported.
+Offline deterministic retrieval is the default: no LLM API or model download.
 
-## Features
+**Status: experimental prototype, not production-certified.** The system does
+not guarantee zero hallucinations, calibrated confidence, fully secure access,
+or independently verified client ROI. Citations prove evidence membership,
+not that a source entails an answer.
 
-- **Multi-format retrieval**: PDF documents, SQL databases, JSON logs
-- **Hybrid search**: Vector embeddings (Sentence Transformers) + BM25 keyword ranking
-- **RBAC enforcement**: Role-based access control at document and column level
-- **Sensitive query blocking**: Protects confidential data (salary, passwords, etc.)
-- **Grounded responses**: Only answers from retrieved context (zero hallucination)
-- **Source citations**: Full traceability of where answers come from
-- **Confidence scoring**: High/Medium/Low confidence based on retrieval quality
-- **Production patterns**: Proper error handling, logging, resource management
+## Changes from the insecure prototype
 
-## HTTP API (production path)
+- Caller-supplied user_id was removed: bearer identity and role come from
+  server-side RAG_API_TOKENS_JSON only.
+- Actual PDF pages are parsed by pypdf instead of embedding hard-coded summaries.
+- BM25 is the offline baseline; optional dense rankings are combined using
+  reciprocal rank fusion, not incomparable raw score magnitudes.
+- Original chunk IDs remain stable through permission-filtered ranking.
+- Sales queries use parameterized SQL with region filters; EMEA totals are
+  calculated from the sample dataset, not the separate report PDF.
+- Manager-only uploads have size, extension, parser, quota and path restrictions.
+- SQL computations, evidence snippets and optional LLM synthesis have distinct
+  output statuses. Unverified answer content is not labelled high confidence.
+- Tests cover authentication, role isolation, SQL totals, uploads, evidence IDs,
+  index alignment and authored synthetic benchmark cases.
 
-```bash
-pip install -r requirements.txt
-python synthetic_data.py
-uvicorn app.api:app --reload --port 8000
-# or: docker compose up --build
-```
+## Local setup
 
-- `GET /health`
-- `GET /v1/users` — demo user ids (`alice`, `bob`, `charlie`)
-- `POST /v1/query` — `{"user_id":"alice","query":"What is total EMEA revenue?"}`
+Python 3.11 or newer:
 
-OpenAPI: `http://127.0.0.1:8000/docs`
+    python -m pip install -r requirements.txt
+    python synthetic_data.py
+    python scripts/issue_demo_tokens.py
 
-Shared utilities: [ml-core](https://github.com/milos-plavsic/ml-core).
+The last command prints a private JSON mapping from randomly generated bearer
+tokens to synthetic identities. Set the complete JSON string as the environment
+variable RAG_API_TOKENS_JSON. Do not check credentials into Git, share them in
+logs, or reuse them. The service denies protected requests without them.
 
-## Quick Start (script demo)
+    uvicorn app.api:app --host 127.0.0.1 --port 8000
 
-### 1. Install Dependencies
-```bash
-pip install -q pandas numpy sentence-transformers rank-bm25 reportlab python-dotenv
-```
+Use http://127.0.0.1:8000/docs or /ui. Example:
 
-### 2. Generate Synthetic Data
-```bash
-python synthetic_data.py
-```
-Creates:
-- 3 realistic PDF documents (financial report, security policy, handbook)
-- SQLite database with sales and employee tables
-- JSON audit logs
-- RBAC policy definitions
-- User role mappings
+    POST /v1/query
+    Authorization: Bearer YOUR_PRIVATE_TOKEN
+    Content-Type: application/json
 
-### 3. Run the Demo
-```bash
-python run_demo.py
-```
+    {"query":"What is the total EMEA revenue?"}
 
-## File Structure
+The synthetic transaction answer should be $75,000 across two records. Its
+financial-report PDF has a different reporting scope and must not be conflated.
 
-```
-rag_assistant/
-├── config.py              # Centralized configuration
-├── synthetic_data.py      # Generate enterprise data (PDFs, SQL, JSON)
-├── rbac_rag.py           # Core RAG pipeline with RBAC
-├── run_demo.py           # Comprehensive test harness
-├── requirements.txt      # Dependencies
-└── data/                 # Auto-created folder
-    ├── financial_report.pdf
-    ├── security_policy.pdf
-    ├── employee_handbook.pdf
-    ├── enterprise.db
-    ├── logs.json
-    ├── rbac.json
-    └── users.json
-```
+Run offline checks:
 
-## How It Works
+    python -m pytest -q
+    python eval_benchmark.py
 
-### 1. Data Loading
-- Loads PDFs, SQL database, and JSON logs
-- Builds vector embeddings using Sentence Transformers
-- Creates BM25 index for keyword search
-- Loads RBAC policies and user mappings
+GET /health is public. Protected routes are POST /v1/query and
+POST /v1/documents/upload. The previous user_id request parameter and
+GET /v1/users endpoint are intentionally removed.
 
-### 2. Query Processing
-```
-User Query
-    ↓
-Validate User & Role (RBAC)
-    ↓
-Check Sensitive Keywords
-    ↓
-Route to Appropriate Sources
-    ├→ SQL queries (for sales/employee data)
-    ├→ PDF search (for documents)
-    └→ Log search (for audit logs)
-    ↓
-Hybrid Ranking (Vector + BM25)
-    ↓
-Generate Grounded Response
-    ↓
-Return with Citations & Confidence
-```
+## Optional dense retrieval
 
-### 3. Security
-- **User validation**: Checks user exists and has valid role
-- **RBAC filtering**: Restricts access to documents/columns by role
-- **Sensitive blocking**: Blocks salary/password queries unless user is manager
-- **Audit logging**: All queries logged with user and role
+    python -m pip install -r requirements-ml.txt
 
-## Test Cases
+Set RAG_EMBEDDING_MODEL to an approved Sentence Transformers model. This may
+download model weights. Review the licence, supply chain, deployment egress
+and model performance before enabling. The baseline does not require this.
 
-### Analyst (alice)
-```python
-("alice", "What is the total revenue from EMEA?")
-→ Can access: sales data, financial reports
-→ Cannot access: employee records, security policies, logs
-```
+## Optional LLM synthesis
 
-### Manager (bob)
-```python
-("bob", "What does the financial report say about Q2 revenue?")
-→ Can access: everything
-→ Can answer sensitive queries
-```
+Configure RAG_LLM_MODEL, RAG_LLM_ENDPOINT and RAG_LLM_API_KEY.
+Remote model endpoints must use HTTPS; loopback HTTP is allowed for local
+servers. The LLM sees only the already-authorised evidence and cannot execute
+tools. Its JSON citation IDs are validated against the retrieved evidence.
 
-### Auditor (charlie)
-```python
-("charlie", "Show me recent error logs")
-→ Can access: logs, security policies
-→ Cannot access: financial data, employee records
-```
+**No factual entailment guarantee** is made. Prompt injection, misleading
+documents and unsupported generated conclusions remain open risks.
 
-## Key Improvements Over Original
+## Architecture
 
-1. **Valid PDF generation** - Uses ReportLab to create proper PDFs (not empty files)
-2. **Database connection cleanup** - Proper resource management with context managers
-3. **User role validation** - Checks role exists before use (prevents crashes)
-4. **Error handling** - Try-catch blocks with logging throughout
-5. **Centralized config** - Externalized magic numbers and thresholds
-6. **Better confidence scoring** - Based on score magnitude + source count
-7. **Robust response parsing** - More resilient regex with error handling
-8. **Comprehensive logging** - Full audit trail and debugging capability
-9. **Test validation** - Tests check that RBAC actually works
-10. **Production patterns** - Follows best practices for enterprise systems
+- rag_service.py: bounded parsing, permission-aware indexing, lexical and
+  optional dense retrieval, SQL filtering, evidence responses, optional LLM.
+- app/api.py: HTTP authentication, local rate limit, safe bounded uploads.
+- synthetic_data.py: synthetic documents, database, logs and policy.
+- fixtures/evaluation.json and eval_benchmark.py: authored functional cases.
+- tests/: functional and adversarial regression coverage.
 
-## Configuration
+Read docs/SECURITY.md, docs/EVALUATION.md and docs/REVIEW.md for the
+threat model, validation requirements, and known gaps.
 
-Edit `config.py` to customize:
+## Important remaining work for real clients
 
-```python
-# Search parameters
-TOP_K_RESULTS = 3                 # Results to return
-VECTOR_WEIGHT = 0.7              # Weight for vector search
-BM25_WEIGHT = 0.3                # Weight for keyword search
+This demo does not implement enterprise OIDC/SSO, multi-tenant authorisation,
+centralised token revocation, a distributed rate limiter, sandboxed PDF
+extraction, AV scanning, a production document store, asynchronous indexing,
+secret management, penetration testing, a statistically representative
+human-labelled benchmark, or demonstrated business return. The offline
+answer baseline is extractive, not free-form LLM generation.
 
-# Confidence scoring
-CONFIDENCE_HIGH_THRESHOLD = 2     # Sources needed for "High"
-CONFIDENCE_MED_THRESHOLD = 1      # Sources needed for "Medium"
+The Docker image runs as a non-root user. Compose binds to local loopback.
+Do not expose the demo publicly or use it for confidential records.
 
-# Security
-SENSITIVE_KEYWORDS = ["salary", "password", ...]
-SENSITIVE_MIN_ROLE = "manager"    # Minimum role for sensitive data
-```
-
-## API Usage
-
-### Basic Query
-```python
-from rbac_rag import EnterpriseRAG, RBACEnforcer
-
-rag = EnterpriseRAG()
-system = RBACEnforcer(rag)
-
-result = system.query(
-    user_id="alice",
-    query_text="What is the total revenue from EMEA?"
-)
-
-print(result["answer"])          # The answer
-print(result["confidence"])      # High/Medium/Low
-print(result["citations"])       # Source documents
-print(result["sources"])         # Retrieval trace
-```
-
-### Response Structure
-```python
-{
-    "answer": "Based on sales data, total revenue is $75,000",
-    "confidence": "Medium",
-    "citations": ["sales_transactions table"],
-    "sources": [
-        {"type": "sql", "table": "sales_transactions", "rows": 4}
-    ],
-    "explainability": {
-        "user_role": "analyst",
-        "retrieval_trace": [...],
-        "rbac_applied": True
-    }
-}
-```
-
-## Monitoring & Debugging
-
-Check logs for detailed execution trace:
-```python
-from config import logger
-
-# Logs show:
-# - Which sources each role can access
-# - Query success/failure
-# - RBAC violations
-# - Parsing errors
-```
-
-## Performance
-
-- **Embedding**: ~200ms (cached after first run)
-- **Search**: ~50ms (hybrid vector + BM25)
-- **Full pipeline**: ~250ms per query
-- **Memory**: ~200MB (Sentence Transformers model)
-
-## Production Considerations
-
-- Add prompt caching to reduce embedding recomputation
-- Implement async search for multiple sources
-- Cache embeddings to disk for faster startup
-- Add rate limiting per user
-- Expand SQL NL-to-SQL using LLM (currently keyword-based)
-- Add citation verification to prevent hallucination
-- Monitor confidence scores for query ambiguity
-
-## License
-
-MIT
+Licence: MIT.
