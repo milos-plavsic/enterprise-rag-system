@@ -187,6 +187,7 @@ class DocumentIndex:
         self.chunks = tuple(chunks)
         self._embedder = embedder
         self._terms = [tokens(c.text) for c in chunks]
+        self._lexical_cache: dict[tuple[int, ...], BM25Okapi] = {}
         self._vectors = None
         if embedder is not None and chunks:
             vectors = embedder.encode([c.text for c in chunks])
@@ -207,7 +208,13 @@ class DocumentIndex:
         # Rebuild lexical corpus statistics from the permitted subset only.
         # Global IDF can otherwise allow forbidden documents to influence ranks.
         permitted_terms = [self._terms[i] for i in candidate_indices]
-        bm25 = BM25Okapi(permitted_terms)
+        cache_key = tuple(candidate_indices)
+        bm25 = self._lexical_cache.get(cache_key)
+        if bm25 is None:
+            bm25 = BM25Okapi(permitted_terms)
+            if len(self._lexical_cache) >= 20:
+                self._lexical_cache.clear()
+            self._lexical_cache[cache_key] = bm25
         local_scores = bm25.get_scores(tokens(query))
         scores_by_index = {
             original_index: float(local_scores[local_index])
