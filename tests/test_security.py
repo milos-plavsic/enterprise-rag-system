@@ -180,3 +180,21 @@ def test_authentication_does_not_initialise_heavy_retriever_before_token_validat
     monkeypatch.setenv("RAG_DATA_DIR","/this/data/directory/does/not/exist")
     unauth=client.post("/v1/query",json={"query":"health insurance"})
     assert unauth.status_code==401
+
+
+def test_unauthorised_documents_do_not_affect_bm25_corpus_statistics():
+    allowed=[
+        Chunk("public_a",1,1,"benefits leave pension",("analyst",)),
+        Chunk("public_b",1,1,"leave holidays vacation",("analyst",)),
+    ]
+    secret=Chunk("secret",1,1,"leave secret restricted leave leave leave",("manager",))
+    before=DocumentIndex(allowed).search("leave benefits","analyst",{"public_a","public_b"})
+    after=DocumentIndex([allowed[0],secret,allowed[1]]).search(
+        "leave benefits","analyst",{"public_a","public_b"})
+    assert [(r["source"],r["rank_score"]) for r in before] == [
+        (r["source"],r["rank_score"]) for r in after]
+
+def test_oversized_utf8_document_rejected():
+    from rag_service import extract_pages, InvalidDocument, MAX_EXTRACTED_CHARS
+    with pytest.raises(InvalidDocument):
+        extract_pages(("x"*(MAX_EXTRACTED_CHARS+1)).encode(),".txt")
