@@ -1,0 +1,3 @@
+-r requirements.txt
+# Optional only; review downloaded model weights and licences.
+sentence-transformers>=3,<6
