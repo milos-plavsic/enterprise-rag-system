@@ -327,14 +327,23 @@ class EnterpriseRAG:
                 raise InvalidDocument("upload quota exceeded")
             name = uuid.uuid4().hex + extension
             path = folder / name
-            descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            staging = self.data_dir / ".upload-staging"
+            staging.mkdir(mode=0o700, parents=True, exist_ok=True)
+            temporary = staging / (name + ".part")
+            descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             try:
                 with os.fdopen(descriptor, "wb") as stream:
                     stream.write(data)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                # No partial document is ever visible in the indexed uploads folder.
+                os.replace(temporary, path)
                 self.refresh_index()
             except Exception:
                 path.unlink(missing_ok=True)
                 raise
+            finally:
+                temporary.unlink(missing_ok=True)
             return {"source_id": "uploads/" + name, "indexed": True, "page_count": len(parsed)}
 
     def search_documents(self, query: str, role: str) -> list[dict[str, Any]]:
