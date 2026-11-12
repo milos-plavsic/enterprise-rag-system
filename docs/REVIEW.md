@@ -26,7 +26,7 @@ honest documentation, and functional/negative regression tests.
 
 ## Open independent sign-off gates
 
-- Authenticated OIDC/SSO integration with secure lifecycle/revocation.
+- Real provider OIDC/SSO integration, role governance and revocation beyond the included JWT verifier.
 - External penetration tests, PDF parser isolation and malware scanning.
 - Realistic permissioned document connector validation.
 - Independently labelled QA, citation entailment, uncertainty calibration.
