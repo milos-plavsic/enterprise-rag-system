@@ -19,9 +19,12 @@ class QueryRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
 
 @lru_cache(maxsize=1)
-def backend() -> tuple[EnterpriseRAG, TokenAuthenticator]:
-    auth = TokenAuthenticator()
-    return EnterpriseRAG(os.getenv("RAG_DATA_DIR", "data")), auth
+def authenticator() -> TokenAuthenticator:
+    return TokenAuthenticator()
+
+@lru_cache(maxsize=1)
+def backend() -> EnterpriseRAG:
+    return EnterpriseRAG(os.getenv("RAG_DATA_DIR", "data"))
 
 class RateGate:
     """Local burst limit; distributed deployment also needs a gateway rate limit."""
@@ -44,7 +47,7 @@ rate_gate = RateGate()
 
 def authenticated(authorization: str | None = Header(default=None)) -> Identity:
     try:
-        _, auth = backend()
+        auth = authenticator()
     except (RuntimeError, ValueError, OSError):
         log.exception("service not configured")
         raise HTTPException(status_code=503, detail="service is unavailable")
@@ -63,7 +66,7 @@ def health() -> dict[str, str]:
 @app.post("/v1/query")
 def query(body: QueryRequest, identity: Identity = Depends(authenticated)) -> dict:
     try:
-        rag, _ = backend()
+        rag = backend()
         return rag.query(body.query, identity)
     except PermissionError:
         raise HTTPException(status_code=403, detail="requested source not permitted")
