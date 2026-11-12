@@ -154,3 +154,29 @@ def test_long_query_validation(client):
     response=client.post("/v1/query",headers=auth("manager"),
         json={"query":"x"*2001})
     assert response.status_code==422
+
+
+def test_unknown_geography_does_not_expand_to_global_total(client):
+    response=client.post("/v1/query",headers=auth("analyst"),
+        json={"query":"Total revenue for South America"}).json()
+    assert response["status"]=="abstained"
+    assert "$225,000" not in response["answer"]
+
+def test_unsupported_time_and_aggregation_abstain(client):
+    for query in ("Q2 2024 revenue EMEA","Average sales for APAC","Compare quarterly EMEA sales"):
+        response=client.post("/v1/query",headers=auth("analyst"),json={"query":query}).json()
+        assert response["status"]=="abstained", query
+
+def test_handbook_request_routes_to_document_not_employee_sql(client):
+    response=client.post("/v1/query",headers=auth("manager"),
+        json={"query":"What does the employee handbook say about benefits?"}).json()
+    assert response["status"]=="evidence_only"
+    assert any(c["source"]=="employee_handbook.pdf" for c in response["citations"])
+
+def test_authentication_does_not_initialise_heavy_retriever_before_token_validation(
+        client, monkeypatch):
+    from app import api
+    api.backend.cache_clear()
+    monkeypatch.setenv("RAG_DATA_DIR","/this/data/directory/does/not/exist")
+    unauth=client.post("/v1/query",json={"query":"health insurance"})
+    assert unauth.status_code==401
