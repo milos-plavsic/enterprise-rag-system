@@ -229,3 +229,16 @@ def test_corrupted_magic_pdf_is_rejected(client):
     result=client.post("/v1/documents/upload",headers=auth("manager"),
         files={"file":("broken.pdf",b"%PDF-1.7\nnot actually a PDF","application/pdf")})
     assert result.status_code==400
+
+
+def test_failed_index_rebuild_rolls_back_atomic_upload(environment,monkeypatch):
+    rag=EnterpriseRAG(environment)
+    def broken_refresh():
+        raise RuntimeError("simulated reindex failure")
+    monkeypatch.setattr(rag,"refresh_index",broken_refresh)
+    with pytest.raises(RuntimeError,match="simulated"):
+        rag.upload(b"unpublished content for staging failure",".txt","manager")
+    uploaded=environment/"uploads"
+    staged=environment/".upload-staging"
+    assert not list(uploaded.iterdir())
+    assert not list(staged.iterdir())
