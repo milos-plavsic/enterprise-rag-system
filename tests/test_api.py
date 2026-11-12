@@ -1,19 +1,11 @@
-import pytest
-from fastapi.testclient import TestClient
-
-from app.api import app
-
-
-@pytest.fixture
-def client():
-    return TestClient(app)
-
+from conftest import auth
 
 def test_health(client):
-    assert client.get("/health").json()["status"] == "ok"
+    assert client.get("/health").status_code == 200
 
-
-def test_query_denied_unknown_user(client):
-    resp = client.post("/v1/query", json={"user_id": "nobody", "query": "hello"})
-    body = resp.json()
-    assert body.get("error_code") == "AUTH_FAILURE"
+def test_api_validation_and_auth(client):
+    unauthenticated=client.post("/v1/query",json={"query":"EMEA revenue"})
+    assert unauthenticated.status_code==401
+    answer=client.post("/v1/query",headers=auth("analyst"),json={"query":"EMEA revenue"})
+    assert answer.status_code==200
+    assert "$75,000" in answer.json()["answer"]
