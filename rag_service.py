@@ -43,6 +43,10 @@ class InvalidDocument(ValueError):
 class InsufficientEvidence(ValueError):
     pass
 
+class ModelResponseError(ValueError):
+    """Malformed, unsupported, or unsafe upstream model output."""
+    pass
+
 
 @dataclass(frozen=True)
 class Identity:
@@ -348,7 +352,15 @@ class EnterpriseRAG:
         matches = re.findall(r"\b(EMEA|APAC|NA|North America|Asia Pacific)\b", query, flags=re.I)
         # Explicit geographic prepositions must not silently become all-region sums.
         qualifiers = re.findall(r"\b(?:for|from|in)\s+(?:the\s+)?([A-Za-z]+(?:\s+[A-Za-z]+)?)", query, flags=re.I)
-        if qualifiers and not matches:
+        valid_qualifiers = {
+            "EMEA", "APAC", "NA", "NORTH AMERICA", "ASIA PACIFIC",
+            "EMEA REGION", "APAC REGION", "NA REGION", "ALL REGIONS",
+        }
+        if any(value.strip().upper() not in valid_qualifiers for value in qualifiers):
+            raise InsufficientEvidence("Requested region or filter is not supported by the sample data.")
+        if qualifiers and not matches and not any(
+            value.strip().upper() == "ALL REGIONS" for value in qualifiers
+        ):
             raise InsufficientEvidence("Requested region is not recognised in the sample data.")
         regions = {"EMEA": "EMEA", "APAC": "APAC", "NA": "NA", "NORTH AMERICA": "NA", "ASIA PACIFIC": "APAC"}
         wanted = {regions[m.upper()] for m in matches}
@@ -482,12 +494,15 @@ def _model_answer(question: str, result: dict[str, Any]) -> dict[str, Any]:
         content = response.read(65_537)
     if len(content) > 65_536:
         raise ValueError("model response too large")
-    parsed_reply = json.loads(content)
-    payload = json.loads(parsed_reply["choices"][0]["message"]["content"])
-    answer, citations = payload.get("answer"), payload.get("citations")
+    try:
+        parsed_reply = json.loads(content)
+        payload = json.loads(parsed_reply["choices"][0]["message"]["content"])
+        answer, citations = payload.get("answer"), payload.get("citations")
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise ModelResponseError("invalid model response schema") from exc
     if (not isinstance(answer, str) or len(answer) > 4_000 or not isinstance(citations, list)
             or any(not isinstance(c, str) or c not in allowed for c in citations)):
-        raise ValueError("invalid model output")
+        raise ModelResponseError("invalid model output")
     if not answer.strip() or not citations:
         result.update(status="abstained", answer="Insufficient supported evidence.", citations=[])
     else:
