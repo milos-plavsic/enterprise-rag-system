@@ -27,11 +27,15 @@ def environment(tmp_path, monkeypatch):
     monkeypatch.setenv("RAG_API_TOKENS_JSON", json.dumps(TOKENS))
     monkeypatch.delenv("RAG_EMBEDDING_MODEL", raising=False)
     monkeypatch.delenv("RAG_LLM_MODEL", raising=False)
+    monkeypatch.delenv("RAG_OIDC_JWKS_URL", raising=False)
+    monkeypatch.delenv("RAG_OIDC_ISSUER", raising=False)
+    monkeypatch.delenv("RAG_OIDC_AUDIENCE", raising=False)
     backend.cache_clear()
     authenticator.cache_clear()
     rate_gate.recent.clear()
     yield tmp_path / "data"
     backend.cache_clear()
+    authenticator.cache_clear()
     rate_gate.recent.clear()
 
 @pytest.fixture
