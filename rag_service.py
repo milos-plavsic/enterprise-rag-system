@@ -320,7 +320,16 @@ class EnterpriseRAG:
     def _sales(self, query: str, role: str) -> dict[str, Any]:
         if "sales_transactions" not in self.allowed(role):
             raise PermissionError("sales source unavailable to role")
+        # Refuse unsupported dimensions instead of silently broadening the query.
+        # These fixtures have neither customer/time-series dimensions nor general SQL.
+        forbidden = r"\b(average|mean|median|count|number|list|show|compare|comparison|growth|forecast|trend|previous|last|quarter|month|year|Q[1-4]|20[0-9]{2}|customer|tier|per|between|before|after)\b"
+        if re.search(forbidden, query, flags=re.I):
+            raise InsufficientEvidence("Unsupported aggregation, period or filter; please use a supported regional total.")
         matches = re.findall(r"\b(EMEA|APAC|NA|North America|Asia Pacific)\b", query, flags=re.I)
+        # Explicit geographic prepositions must not silently become all-region sums.
+        qualifiers = re.findall(r"\b(?:for|from|in)\s+(?:the\s+)?([A-Za-z]+(?:\s+[A-Za-z]+)?)", query, flags=re.I)
+        if qualifiers and not matches:
+            raise InsufficientEvidence("Requested region is not recognised in the sample data.")
         regions = {"EMEA": "EMEA", "APAC": "APAC", "NA": "NA", "NORTH AMERICA": "NA", "ASIA PACIFIC": "APAC"}
         wanted = {regions[m.upper()] for m in matches}
         if len(wanted) > 1:
@@ -380,7 +389,7 @@ class EnterpriseRAG:
         lower = query.casefold()
         role = identity.role
         # Tool routing is deterministic and no LLM may construct arbitrary SQL.
-        if re.search(r"\b(employee|employees|staff directory)\b", lower):
+        if re.search(r"\b(employee|employees|staff directory)\b", lower) and not re.search(r"\b(handbook|document|pdf|policy)\b", lower):
             return self._employees(role)
         if re.search(r"\b(log|logs|alerts?|errors?|warnings?)\b", lower):
             return self._logs(query, role)
@@ -421,6 +430,8 @@ def _model_answer(question: str, result: dict[str, Any]) -> dict[str, Any]:
             (parsed.scheme == "http" and parsed.hostname not in ("localhost", "127.0.0.1", "::1")) or
             parsed.username or parsed.password or parsed.query or parsed.fragment):
         raise RuntimeError("LLM endpoint must use HTTPS or explicit loopback HTTP")
+    if parsed.hostname not in {"localhost", "127.0.0.1", "::1"} and os.getenv("RAG_ALLOW_REMOTE_LLM", "").lower() != "true":
+        raise RuntimeError("remote model egress requires explicit RAG_ALLOW_REMOTE_LLM=true")
     allowed = {x["id"] for x in result["citations"]}
     context = [{"id": x["id"], "text": x["text"][:1200]} for x in result["evidence"]]
     body = json.dumps({
