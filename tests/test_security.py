@@ -242,3 +242,26 @@ def test_failed_index_rebuild_rolls_back_atomic_upload(environment,monkeypatch):
     staged=environment/".upload-staging"
     assert not list(uploaded.iterdir())
     assert not list(staged.iterdir())
+
+
+def test_internal_failure_detail_is_never_returned_to_client(client,monkeypatch):
+    from app import api
+    from rag_service import InsufficientEvidence, InvalidDocument
+
+    class BrokenService:
+        def query(self,question,identity):
+            raise InsufficientEvidence("SECRET_INTERNAL_PATH=/srv/private")
+        def upload(self,payload,extension,role):
+            raise InvalidDocument("SECRET_PARSER_DETAILS=/srv/private")
+
+    monkeypatch.setattr(api,"backend",lambda:BrokenService())
+    query=client.post("/v1/query",headers=auth("analyst"),
+        json={"query":"unsupported regional amount"})
+    assert query.status_code==200
+    assert query.json()["status"]=="abstained"
+    assert "SECRET" not in query.text
+
+    upload=client.post("/v1/documents/upload",headers=auth("manager"),
+        files={"file":("test.txt",b"valid document content","text/plain")})
+    assert upload.status_code==400
+    assert "SECRET" not in upload.text
