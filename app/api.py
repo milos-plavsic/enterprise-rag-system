@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
 from rag_service import EnterpriseRAG, Identity, TokenAuthenticator, InvalidDocument, InsufficientEvidence, MAX_UPLOAD_BYTES
+from auth_oidc import OIDCAuthenticator
 
 log = logging.getLogger("enterprise_rag.api")
 app = FastAPI(title="Permission-Aware Enterprise Retrieval", version="2.0.0")
@@ -19,7 +20,11 @@ class QueryRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
 
 @lru_cache(maxsize=1)
-def authenticator() -> TokenAuthenticator:
+def authenticator() -> TokenAuthenticator | OIDCAuthenticator:
+    if os.getenv("RAG_OIDC_JWKS_URL"):
+        if os.getenv("RAG_API_TOKENS_JSON"):
+            raise RuntimeError("choose OIDC or demo bearer tokens, not both")
+        return OIDCAuthenticator()
     return TokenAuthenticator()
 
 @lru_cache(maxsize=1)
