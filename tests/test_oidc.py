@@ -74,3 +74,15 @@ def test_missing_configuration_denied(monkeypatch):
     with pytest.raises(RuntimeError,match="not both"):
         authenticator()
     authenticator.cache_clear()
+
+
+def test_partial_oidc_settings_never_fall_back_to_demo_tokens(monkeypatch):
+    from app.api import authenticator
+    monkeypatch.setenv("RAG_OIDC_ISSUER",ISSUER)
+    monkeypatch.delenv("RAG_OIDC_JWKS_URL",raising=False)
+    monkeypatch.delenv("RAG_OIDC_AUDIENCE",raising=False)
+    monkeypatch.setenv("RAG_API_TOKENS_JSON",'{"A":"demo"}')
+    authenticator.cache_clear()
+    with pytest.raises(RuntimeError,match="must include"):
+        authenticator()
+    authenticator.cache_clear()
