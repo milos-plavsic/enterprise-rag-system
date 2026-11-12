@@ -21,7 +21,14 @@ class QueryRequest(BaseModel):
 
 @lru_cache(maxsize=1)
 def authenticator() -> TokenAuthenticator | OIDCAuthenticator:
-    if os.getenv("RAG_OIDC_JWKS_URL"):
+    oidc_config = (
+        os.getenv("RAG_OIDC_JWKS_URL", ""),
+        os.getenv("RAG_OIDC_ISSUER", ""),
+        os.getenv("RAG_OIDC_AUDIENCE", ""),
+    )
+    if any(oidc_config):
+        if not all(oidc_config):
+            raise RuntimeError("OIDC configuration must include JWKS URL, issuer and audience")
         if os.getenv("RAG_API_TOKENS_JSON"):
             raise RuntimeError("choose OIDC or demo bearer tokens, not both")
         return OIDCAuthenticator()
