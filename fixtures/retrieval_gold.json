@@ -1,0 +1,63 @@
+{
+  "schema_version": "1.0",
+  "cases": [
+    {
+      "id": "analyst_finance",
+      "role": "analyst",
+      "question": "Q2 financial revenue report",
+      "expected_sources": [
+        "financial_report.pdf"
+      ]
+    },
+    {
+      "id": "manager_benefits",
+      "role": "manager",
+      "question": "health insurance employee handbook",
+      "expected_sources": [
+        "employee_handbook.pdf"
+      ]
+    },
+    {
+      "id": "auditor_security",
+      "role": "auditor",
+      "question": "security access policy",
+      "expected_sources": [
+        "security_policy.pdf"
+      ]
+    },
+    {
+      "id": "manager_security",
+      "role": "manager",
+      "question": "security access records policy",
+      "expected_sources": [
+        "security_policy.pdf"
+      ]
+    },
+    {
+      "id": "analyst_employment_denial",
+      "role": "analyst",
+      "question": "PTO leave employee handbook",
+      "expected_sources": []
+    },
+    {
+      "id": "auditor_financial_denial",
+      "role": "auditor",
+      "question": "financial Q2 revenue report",
+      "expected_sources": []
+    },
+    {
+      "id": "manager_finance",
+      "role": "manager",
+      "question": "financial report revenue",
+      "expected_sources": [
+        "financial_report.pdf"
+      ]
+    },
+    {
+      "id": "auditor_handbook_denial",
+      "role": "auditor",
+      "question": "insurance benefits handbook",
+      "expected_sources": []
+    }
+  ]
+}
