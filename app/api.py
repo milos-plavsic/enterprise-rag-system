@@ -1,66 +1,96 @@
-"""HTTP API for enterprise RBAC RAG."""
-
+"""FastAPI transport: trusted bearer identity, bounded inputs, safe uploads."""
 from __future__ import annotations
-
+import logging
+import os
+import threading
+import time
+from collections import defaultdict, deque
 from functools import lru_cache
 from pathlib import Path
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from pydantic import BaseModel, ConfigDict, Field
+from rag_service import EnterpriseRAG, Identity, TokenAuthenticator, InvalidDocument, InsufficientEvidence, MAX_UPLOAD_BYTES
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
-
-from rbac_rag import EnterpriseRAG, RBACEnforcer
-
-app = FastAPI(
-    title="Enterprise RAG System",
-    version="1.0.0",
-    description="Hybrid RAG with role-based access control and cited answers",
-)
-
+log = logging.getLogger("enterprise_rag.api")
+app = FastAPI(title="Permission-Aware Enterprise Retrieval", version="2.0.0")
 
 class QueryRequest(BaseModel):
-    user_id: str = Field(..., min_length=1, description="User id from users.json")
-    query: str = Field(..., min_length=1, max_length=4000)
-
-_ui = Path(__file__).resolve().parent / "static"
-if _ui.is_dir():
-    app.mount("/ui", StaticFiles(directory=str(_ui), html=True), name="rag-ui")
-
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(min_length=1, max_length=2000)
 
 @lru_cache(maxsize=1)
-def _system() -> RBACEnforcer:
-    return RBACEnforcer(EnterpriseRAG())
+def backend() -> tuple[EnterpriseRAG, TokenAuthenticator]:
+    auth = TokenAuthenticator()
+    return EnterpriseRAG(os.getenv("RAG_DATA_DIR", "data")), auth
 
+class RateGate:
+    """Local burst limit; distributed deployment also needs a gateway rate limit."""
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.recent: dict[str, deque[float]] = defaultdict(deque)
+
+    def check(self, subject: str) -> bool:
+        now = time.monotonic()
+        with self.lock:
+            queue = self.recent[subject]
+            while queue and queue[0] < now - 60:
+                queue.popleft()
+            if len(queue) >= 30:
+                return False
+            queue.append(now)
+        return True
+
+rate_gate = RateGate()
+
+def authenticated(authorization: str | None = Header(default=None)) -> Identity:
+    try:
+        _, auth = backend()
+    except (RuntimeError, ValueError, OSError):
+        log.exception("service not configured")
+        raise HTTPException(status_code=503, detail="service is unavailable")
+    identity = auth.authenticate(authorization)
+    if identity is None:
+        raise HTTPException(status_code=401, detail="authentication required",
+                            headers={"WWW-Authenticate": "Bearer"})
+    if not rate_gate.check(identity.subject):
+        raise HTTPException(status_code=429, detail="rate limit exceeded")
+    return identity
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
-
 @app.post("/v1/query")
-def query(body: QueryRequest) -> dict:
-    """Run an RBAC-filtered RAG query."""
+def query(body: QueryRequest, identity: Identity = Depends(authenticated)) -> dict:
     try:
-        return _system().query(body.user_id, body.query)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        rag, _ = backend()
+        return rag.query(body.query, identity)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="requested source not permitted")
+    except InsufficientEvidence as exc:
+        return {"status": "abstained", "answer": str(exc), "citations": [], "evidence": [],
+                "confidence": None}
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid query")
+    except Exception:
+        log.exception("query failure")
+        raise HTTPException(status_code=503, detail="query unavailable")
 
-
-@app.post("/v1/documents/upload")
-async def upload_document(file: UploadFile = File(...)) -> dict:
-    """Store an uploaded text document for future indexing (metadata only in v1)."""
-    content = (await file.read()).decode("utf-8", errors="replace")
-    if len(content) > 500_000:
-        raise HTTPException(status_code=413, detail="file too large")
-    upload_dir = Path(__file__).resolve().parents[1] / "data" / "uploads"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    path = upload_dir / (file.filename or "upload.txt")
-    path.write_text(content, encoding="utf-8")
-    return {"stored": str(path), "bytes": len(content), "status": "stored"}
-
-
-@app.get("/v1/users")
-def list_users() -> dict:
-    """List demo users (ids only) for the interactive docs."""
-    users = _system().users
-    return {"users": sorted(users.keys())}
+@app.post("/v1/documents/upload", status_code=201)
+async def upload_document(file: UploadFile = File(...), identity: Identity = Depends(authenticated)) -> dict:
+    if identity.role != "manager":
+        raise HTTPException(status_code=403, detail="uploads require manager role")
+    extension = Path(file.filename or "").suffix.casefold()
+    if extension not in {".pdf", ".txt"}:
+        raise HTTPException(status_code=415, detail="only PDF and UTF-8 text are accepted")
+    try:
+        payload = await file.read(MAX_UPLOAD_BYTES + 1)
+        rag, _ = backend()
+        return rag.upload(payload, extension, identity.role)
+    except InvalidDocument as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception:
+        log.exception("document upload failure")
+        raise HTTPException(status_code=503, detail="upload unavailable")
+    finally:
+        await file.close()
