@@ -340,7 +340,7 @@ class EnterpriseRAG:
         label = region or "all regions"
         return {
             "status": "computed",
-            "answer": f"Recorded sample sales for {label}: \${total:,.0f} across {count} transactions.",
+            "answer": f"Recorded sample sales for {label}: ${total:,.0f} across {count} transactions.",
             "citations": [{"source": "sales_transactions", "rows": count, "filter": region}],
             "evidence": [],
             "confidence": None,
