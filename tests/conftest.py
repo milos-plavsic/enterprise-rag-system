@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
-from app.api import app, backend, rate_gate
+from app.api import app, backend, authenticator, rate_gate
 from rag_service import EnterpriseRAG, Identity, TokenAuthenticator
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +28,7 @@ def environment(tmp_path, monkeypatch):
     monkeypatch.delenv("RAG_EMBEDDING_MODEL", raising=False)
     monkeypatch.delenv("RAG_LLM_MODEL", raising=False)
     backend.cache_clear()
+    authenticator.cache_clear()
     rate_gate.recent.clear()
     yield tmp_path / "data"
     backend.cache_clear()
