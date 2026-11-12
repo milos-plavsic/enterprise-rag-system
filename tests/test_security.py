@@ -6,7 +6,7 @@ from rag_service import (
     Chunk, DocumentIndex, EnterpriseRAG, Identity, InvalidDocument,
     TokenAuthenticator, reciprocal_rank_fusion,
 )
-from tests.conftest import auth, TOKENS
+from conftest import auth, TOKENS
 
 def test_health(client):
     assert client.get("/health").json() == {"status":"ok"}
@@ -42,9 +42,7 @@ def test_all_regions_and_ambiguous_region(client):
     assert ambiguous["status"]=="abstained"
 
 def test_employee_permission(client):
-    denied=client.post("/v1/query",headers=auth("analyst"),
-        json={"query":"List employees"}).json() if False else client.post(
-        "/v1/query",headers=auth("analyst"),json={"query":"List employees"})
+    denied=client.post("/v1/query",headers=auth("analyst"),json={"query":"List employees"})
     assert denied.status_code==403
     allowed=client.post("/v1/query",headers=auth("manager"),
         json={"query":"List employees"})
