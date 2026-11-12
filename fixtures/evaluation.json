@@ -1,0 +1,63 @@
+{
+  "schema_version": "1.0",
+  "cases": [
+    {
+      "id": "emea_total",
+      "role": "analyst",
+      "question": "What is total revenue in EMEA?",
+      "expect": "computed",
+      "must_contain": "$75,000"
+    },
+    {
+      "id": "all_total",
+      "role": "analyst",
+      "question": "What are total sales?",
+      "expect": "computed",
+      "must_contain": "$225,000"
+    },
+    {
+      "id": "apac_total",
+      "role": "analyst",
+      "question": "Total APAC revenue",
+      "expect": "computed",
+      "must_contain": "$30,000"
+    },
+    {
+      "id": "manager_directory",
+      "role": "manager",
+      "question": "Show employees",
+      "expect": "evidence_only"
+    },
+    {
+      "id": "analyst_denied_employees",
+      "role": "analyst",
+      "question": "Show employees",
+      "expect": "denied"
+    },
+    {
+      "id": "auditor_logs",
+      "role": "auditor",
+      "question": "Recent error logs",
+      "expect": "evidence_only"
+    },
+    {
+      "id": "analyst_denied_logs",
+      "role": "analyst",
+      "question": "Recent error logs",
+      "expect": "denied"
+    },
+    {
+      "id": "auditor_denied_sales",
+      "role": "auditor",
+      "question": "EMEA revenue",
+      "expect": "denied"
+    },
+    {
+      "id": "auditor_security_doc",
+      "role": "auditor",
+      "question": "What is the security policy?",
+      "expect": "evidence_only",
+      "forbid_source": "financial_report.pdf"
+    }
+  ]
+}
