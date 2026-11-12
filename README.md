@@ -71,7 +71,7 @@ and model performance before enabling. The baseline does not require this.
 
 ## Optional LLM synthesis
 
-Configure RAG_LLM_MODEL, RAG_LLM_ENDPOINT and RAG_LLM_API_KEY.
+Configure RAG_LLM_MODEL, RAG_LLM_ENDPOINT and RAG_LLM_API_KEY. Remote model egress also requires RAG_ALLOW_REMOTE_LLM=true.
 Remote model endpoints must use HTTPS; loopback HTTP is allowed for local
 servers. The LLM sees only the already-authorised evidence and cannot execute
 tools. Its JSON citation IDs are validated against the retrieved evidence.
