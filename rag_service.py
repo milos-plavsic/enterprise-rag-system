@@ -185,7 +185,6 @@ class DocumentIndex:
         self.chunks = tuple(chunks)
         self._embedder = embedder
         self._terms = [tokens(c.text) for c in chunks]
-        self._bm25 = BM25Okapi(self._terms) if chunks else None
         self._vectors = None
         if embedder is not None and chunks:
             vectors = embedder.encode([c.text for c in chunks])
@@ -203,10 +202,20 @@ class DocumentIndex:
         ]
         if not candidate_indices or not tokens(query):
             return []
-        bm25 = self._bm25.get_scores(tokens(query)) if self._bm25 is not None else []
+        # Rebuild lexical corpus statistics from the permitted subset only.
+        # Global IDF can otherwise allow forbidden documents to influence ranks.
+        permitted_terms = [self._terms[i] for i in candidate_indices]
+        bm25 = BM25Okapi(permitted_terms)
+        local_scores = bm25.get_scores(tokens(query))
         lexical = sorted(
-            (i for i in candidate_indices if bm25[i] > 0),
-            key=lambda i: (-float(bm25[i]), self.chunks[i].id),
+            (
+                original_index for local_index, original_index in enumerate(candidate_indices)
+                if set(tokens(query)) & set(permitted_terms[local_index])
+            ),
+            key=lambda i: (
+                -float(local_scores[candidate_indices.index(i)]),
+                self.chunks[i].id,
+            ),
         )
         rankings = [lexical] if lexical else []
         if self._vectors is not None:
