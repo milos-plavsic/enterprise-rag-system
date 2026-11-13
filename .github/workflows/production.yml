@@ -17,11 +17,17 @@ jobs:
       - run: docker build --tag rag-candidate:${GITHUB_SHA} .
       - name: Exercise deployment, policy and restore
         run: python3 scripts/deployment_smoke.py rag-candidate:${GITHUB_SHA}
-      - uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+      - id: scan
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
         with:
           image: rag-candidate:${{ github.sha }}
           severity-cutoff: high
-          fail-build: true
+          fail-build: false
+          output-format: json
+      - name: Enforce high and critical vulnerability gate
+        env:
+          RAG_SCAN_REPORT: ${{ steps.scan.outputs.json }}
+        run: python3 scripts/check_image_scan.py "$RAG_SCAN_REPORT"
       - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           image: rag-candidate:${{ github.sha }}
