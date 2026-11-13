@@ -1,6 +1,6 @@
 # Enterprise deployment candidate
 
-This is an evidence-only profile for **one enterprise security domain, one Linux host and one API process**. It is not a hosted multi-tenant service or an HA system. It is not approved for enterprise data until the deployment-specific gates below are met. The local demo remains separate and keeps its structured synthetic queries, demo authentication, optional generation and browser interface. The production profile exposes document retrieval and does not execute demo SQL, generate text, load an embedding model or send evidence to a model provider.
+This is an evidence-only profile for **one enterprise security domain, one linux/amd64 host and one API process**. It is not a hosted multi-tenant service or an HA system. It is not approved for enterprise data until the deployment-specific gates below are met. The local demo remains separate and keeps its structured synthetic queries, demo authentication, optional generation and browser interface. The production profile exposes document retrieval and does not execute demo SQL, generate text, load an embedding model or send evidence to a model provider.
 
 ## Install and operate
 
@@ -39,3 +39,10 @@ Uploaded documents are manager-only and private to the authenticated uploader, n
 - Record security and data governance approval, ownership, retention, authorised sources, exceptions and a named go/no-go decision. This profile intentionally does not support generated answers. Enabling those in a future profile requires separate answer and citation validation, data-egress and provider approval, and operational cost evidence.
 
 Reference baselines for review include [OWASP ASVS](https://owasp.org/www-project-application-security-verification-standard/), [NIST AI 600-1](https://doi.org/10.6028/NIST.AI.600-1) and [SLSA provenance](https://slsa.dev/spec/v1.2/provenance). These are reference points, not claims of certification or conformance.
+
+
+## Image vulnerability disposition
+
+The production image updates Alpine `zlib` and `krb5-libs` to the vendor fixed packages. It temporarily uses the checksum-pinned, signed Alpine `sqlite-libs` 3.54.1-r0 from the Alpine edge package repository because 3.24 still ships 3.53.4. No edge package repository is enabled in the image. Revisit the one package override when 3.24 provides a stable patched library. The [SQLite release history](https://www.sqlite.org/changes.html) and [Debian maintainer record](https://bugs.debian.org/1152790) document the upstream 3.54 library fixes.
+
+The sole exact-match disposition in the high/critical scan gate is `CVE-2026-119586` on Alpine `sqlite-libs` 3.54.1-r0. The advisory describes the `sqlite3` command-line shell's `.recover` command, which is absent from this image. No application or restore command shells out to `sqlite3`. CI checks the actual runtime library and CLI absence before packaging. The raw report is retained even when the gate fails. A match on another package, version or advisory is not waived. See the [vendor advisory](https://bugzilla.redhat.com/show_bug.cgi?id=CVE-2026-119586).

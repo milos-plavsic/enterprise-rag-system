@@ -14,7 +14,11 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-      - run: docker build --tag rag-candidate:${GITHUB_SHA} .
+      - run: docker build --platform linux/amd64 --tag rag-candidate:${GITHUB_SHA} .
+      - name: Verify SQLite runtime and absence of affected CLI
+        run: >-
+          docker run --rm --network none --entrypoint python rag-candidate:${GITHUB_SHA}
+          -c 'import shutil, sqlite3; assert sqlite3.sqlite_version_info >= (3,54,1); assert shutil.which("sqlite3") is None'
       - name: Exercise deployment, policy and restore
         run: python3 scripts/deployment_smoke.py rag-candidate:${GITHUB_SHA}
       - id: scan
