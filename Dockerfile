@@ -1,7 +1,8 @@
-FROM python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
+FROM python:3.12-alpine3.24@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 RAG_PROFILE=production
 WORKDIR /app
-RUN useradd --system --uid 10001 --create-home appuser \
+RUN addgroup -S -g 10001 appuser \
+    && adduser -S -D -H -u 10001 -G appuser appuser \
     && install -d -o appuser -g appuser -m 0700 /var/lib/rag /run/rag-parser
 COPY requirements-runtime.lock .
 RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes -r requirements-runtime.lock

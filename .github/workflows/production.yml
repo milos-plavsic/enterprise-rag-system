@@ -24,6 +24,11 @@ jobs:
           severity-cutoff: high
           fail-build: false
           output-format: json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rag-image-scan-${{ github.sha }}
+          path: ${{ steps.scan.outputs.json }}
+          if-no-files-found: error
       - name: Enforce high and critical vulnerability gate
         env:
           RAG_SCAN_REPORT: ${{ steps.scan.outputs.json }}
