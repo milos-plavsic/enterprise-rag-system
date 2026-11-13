@@ -24,6 +24,18 @@ parsing, stable evidence IDs, pre-ranking role/source filtering, rank fusion,
 parameterized regional SQL, explicit routing, optional bounded model synthesis,
 honest documentation, and functional/negative regression tests.
 
+## Follow-up correctness work
+
+- Replaced the sales keyword blacklist with a complete supported-request grammar.
+  Unsupported filters, exclusions, comparisons and mixed scopes abstain.
+- Document intent takes precedence over overlapping structured-source words.
+- Source-level ranking removes duplicate sources before its cutoff. Retrieval
+  evaluation can compare lexical, dense and hybrid modes at the same cutoff.
+- Added a loopback model integration regression for permission-scoped evidence.
+- Moved upload authorisation ahead of multipart reads and candidate index
+  validation ahead of file promotion. Kept blocking index work off the API
+  event loop.
+
 ## Open independent sign-off gates
 
 - Real provider OIDC/SSO integration, role governance and revocation beyond the included JWT verifier.

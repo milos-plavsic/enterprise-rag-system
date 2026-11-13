@@ -1,6 +1,8 @@
 """Model boundary tests run without network or hosted model credentials."""
 from __future__ import annotations
 import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 import pytest
 import rag_service
 
@@ -61,3 +63,53 @@ def test_model_abstention_has_no_unverified_citation(monkeypatch):
     out=rag_service._model_answer("Missing fact?",starting_evidence())
     assert out["status"]=="abstained"
     assert out["citations"]==[]
+
+
+@pytest.mark.parametrize("payload", [[], None, "not an object"])
+def test_non_object_model_json_is_rejected(monkeypatch, payload):
+    monkeypatch.setenv("RAG_LLM_ENDPOINT", "http://127.0.0.1:8877/v1")
+    monkeypatch.setenv("RAG_LLM_MODEL", "mock")
+    monkeypatch.setattr(rag_service, "build_opener", lambda *args: FakeOpener(payload))
+    with pytest.raises(rag_service.ModelResponseError, match="schema"):
+        rag_service._model_answer("How much PTO?", starting_evidence())
+
+
+def test_api_to_loopback_provider_uses_only_authorised_evidence(client, monkeypatch):
+    from conftest import auth
+
+    received = []
+
+    class Provider(BaseHTTPRequestHandler):
+        def do_POST(self):
+            received.append(self.path)
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            context = json.loads(body["messages"][1]["content"])
+            received.append(context)
+            answer = {"answer": "Synthetic provider answer.",
+                      "citations": [context["passages"][0]["id"]]}
+            output = json.dumps({"choices": [{"message": {"content": json.dumps(answer)}}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(output)))
+            self.end_headers()
+            self.wfile.write(output)
+
+        def log_message(self, *args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Provider) as server:
+        thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        thread.start()
+        try:
+            monkeypatch.setenv("RAG_LLM_MODEL", "mock")
+            monkeypatch.setenv("RAG_LLM_ENDPOINT", f"http://127.0.0.1:{server.server_port}/v1")
+            response = client.post("/v1/query", headers=auth("analyst"),
+                                   json={"query": "financial report revenue"})
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+    assert response.status_code == 200
+    assert response.json()["status"] == "generated_unverified"
+    assert received[0] == "/v1/chat/completions"
+    passages = received[1]["passages"]
+    assert passages and all(p["id"].startswith("financial_report.pdf:") for p in passages)

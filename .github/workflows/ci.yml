@@ -20,5 +20,5 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - run: python -m pip install -r requirements.txt
-      - run: python -m compileall -q app rag_service.py auth_oidc.py eval_benchmark.py tests
+      - run: python -m compileall -q app rag_service.py auth_oidc.py query_intent.py eval_benchmark.py eval_retrieval.py tests
       - run: python -m pytest -q

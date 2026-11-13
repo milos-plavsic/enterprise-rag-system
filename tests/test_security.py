@@ -233,9 +233,9 @@ def test_corrupted_magic_pdf_is_rejected(client):
 
 def test_failed_index_rebuild_rolls_back_atomic_upload(environment,monkeypatch):
     rag=EnterpriseRAG(environment)
-    def broken_refresh():
+    def broken_refresh(_chunks):
         raise RuntimeError("simulated reindex failure")
-    monkeypatch.setattr(rag,"refresh_index",broken_refresh)
+    monkeypatch.setattr(rag,"_build_index",broken_refresh)
     with pytest.raises(RuntimeError,match="simulated"):
         rag.upload(b"unpublished content for staging failure",".txt","manager")
     uploaded=environment/"uploads"

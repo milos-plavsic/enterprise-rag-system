@@ -16,15 +16,19 @@ import re
 import sqlite3
 import threading
 import uuid
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
-from urllib.request import Request, build_opener, HTTPSHandler, HTTPRedirectHandler
+from urllib.request import Request, build_opener, HTTPSHandler, HTTPRedirectHandler, ProxyHandler
 from urllib.error import HTTPError
 
 from pypdf import PdfReader
 from rank_bm25 import BM25Okapi
+
+from query_intent import InsufficientEvidence as InsufficientEvidence
+from query_intent import route, sales_region
 
 log = logging.getLogger("enterprise_rag")
 WORDS = re.compile(r"[\w]+(?:[-'][\w]+)*", re.UNICODE)
@@ -37,10 +41,6 @@ TOP_K = 4
 
 
 class InvalidDocument(ValueError):
-    pass
-
-
-class InsufficientEvidence(ValueError):
     pass
 
 class ModelResponseError(ValueError):
@@ -70,6 +70,14 @@ class Chunk:
 
 def tokens(value: str) -> list[str]:
     return WORDS.findall(value.casefold())
+
+
+def _document_permitted(
+    source: str, role: str, roles: tuple[str, ...] | list[str], allowed: set[str],
+) -> bool:
+    return role in roles and (
+        source in allowed or (source.startswith("uploads/") and "uploads" in allowed)
+    )
 
 
 class TokenAuthenticator:
@@ -199,41 +207,52 @@ class DocumentIndex:
             if len(self._vectors) != len(chunks):
                 raise ValueError("embedding count differs from indexed chunk count")
 
-    def search(self, query: str, role: str, allowed_sources: set[str], k: int = TOP_K) -> list[dict[str, Any]]:
+    def search(
+        self, query: str, role: str, allowed_sources: set[str], k: int = TOP_K,
+        *, distinct_sources: bool = False, ranking: str = "hybrid",
+    ) -> list[dict[str, Any]]:
         if not 1 <= k <= 20:
             raise ValueError("invalid retrieval limit")
+        if ranking not in {"lexical", "dense", "hybrid"}:
+            raise ValueError("unknown retrieval mode")
+        if ranking == "dense" and self._embedder is None:
+            raise ValueError("dense ranking requires an embedder")
         candidate_indices = [
             i for i, doc in enumerate(self.chunks)
-            if role in doc.roles and (doc.source in allowed_sources or
-                                      (doc.source.startswith("uploads/") and "uploads" in allowed_sources))
+            if _document_permitted(doc.source, role, doc.roles, allowed_sources)
         ]
-        if not candidate_indices or not tokens(query):
+        query_tokens = tokens(query)
+        if not candidate_indices or not query_tokens:
             return []
-        # Rebuild lexical corpus statistics from the permitted subset only.
-        # Global IDF can otherwise allow forbidden documents to influence ranks.
-        permitted_terms = [self._terms[i] for i in candidate_indices]
-        cache_key = tuple(candidate_indices)
-        bm25 = self._lexical_cache.get(cache_key)
-        if bm25 is None:
-            bm25 = BM25Okapi(permitted_terms)
-            if len(self._lexical_cache) >= 20:
-                self._lexical_cache.clear()
-            self._lexical_cache[cache_key] = bm25
-        local_scores = bm25.get_scores(tokens(query))
-        scores_by_index = {
-            original_index: float(local_scores[local_index])
-            for local_index, original_index in enumerate(candidate_indices)
-        }
-        query_terms = set(tokens(query))
-        lexical = sorted(
-            (
-                original_index for local_index, original_index in enumerate(candidate_indices)
-                if query_terms & set(permitted_terms[local_index])
-            ),
-            key=lambda i: (-scores_by_index[i], self.chunks[i].id),
-        )
-        rankings = [lexical] if lexical else []
-        if self._vectors is not None:
+        rankings = []
+        lexical_indices = [i for i in candidate_indices if self._terms[i]]
+        if ranking != "dense" and lexical_indices:
+            # Rebuild lexical corpus statistics from the permitted subset only.
+            # Global IDF can otherwise allow forbidden documents to influence ranks.
+            permitted_terms = [self._terms[i] for i in lexical_indices]
+            cache_key = tuple(lexical_indices)
+            bm25 = self._lexical_cache.get(cache_key)
+            if bm25 is None:
+                bm25 = BM25Okapi(permitted_terms)
+                if len(self._lexical_cache) >= 20:
+                    self._lexical_cache.clear()
+                self._lexical_cache[cache_key] = bm25
+            local_scores = bm25.get_scores(query_tokens)
+            scores_by_index = {
+                original_index: float(local_scores[local_index])
+                for local_index, original_index in enumerate(lexical_indices)
+            }
+            query_terms = set(query_tokens)
+            lexical = sorted(
+                (
+                    original_index for local_index, original_index in enumerate(lexical_indices)
+                    if query_terms & set(permitted_terms[local_index])
+                ),
+                key=lambda i: (-scores_by_index[i], self.chunks[i].id),
+            )
+            if lexical:
+                rankings.append(lexical)
+        if ranking != "lexical" and self._vectors is not None:
             qvector = [float(x) for x in self._embedder.encode([query])[0]]
             norm_q = math.sqrt(sum(v * v for v in qvector))
             scored = []
@@ -250,7 +269,13 @@ class DocumentIndex:
             if scored:
                 rankings.append([i for _, i in scored])
         fused = reciprocal_rank_fusion(rankings)
-        ranked = sorted(fused, key=lambda i: (-fused[i], self.chunks[i].id))[:k]
+        ranked = sorted(fused, key=lambda i: (-fused[i], self.chunks[i].id))
+        if distinct_sources:
+            # Keep the highest-ranked chunk per source before applying the cutoff.
+            source_ranks = {}
+            for i in ranked:
+                source_ranks.setdefault(self.chunks[i].source, i)
+            ranked = list(source_ranks.values())
         return [
             {
                 "id": self.chunks[i].id,
@@ -259,7 +284,7 @@ class DocumentIndex:
                 "text": self.chunks[i].text,
                 "rank_score": round(fused[i], 8),
             }
-            for i in ranked
+            for i in ranked[:k]
         ]
 
 
@@ -310,7 +335,10 @@ class EnterpriseRAG:
 
     def refresh_index(self) -> None:
         with self._lock:
-            self._index = DocumentIndex(self._load_chunks(), self._embedder)
+            self._index = self._build_index(self._load_chunks())
+
+    def _build_index(self, chunks: list[Chunk]) -> DocumentIndex:
+        return DocumentIndex(chunks, self._embedder)
 
     def upload(self, data: bytes, extension: str, role: str) -> dict[str, Any]:
         if role != "manager":
@@ -318,14 +346,20 @@ class EnterpriseRAG:
         if extension not in (".pdf", ".txt"):
             raise InvalidDocument("unsupported extension")
         parsed = extract_pages(data, extension)
-        if not any(chunk_text(page) for page in parsed):
+        name = uuid.uuid4().hex + extension
+        source = "uploads/" + name
+        new_chunks = [
+            Chunk(source, page_number, number, text, ("manager",))
+            for page_number, page in enumerate(parsed, start=1)
+            for number, text in enumerate(chunk_text(page), start=1)
+        ]
+        if not new_chunks:
             raise InvalidDocument("no indexable text in document")
         with self._lock:
             folder = self.data_dir / "uploads"
             folder.mkdir(mode=0o700, parents=True, exist_ok=True)
             if len(list(folder.iterdir())) >= MAX_DOCUMENTS:
                 raise InvalidDocument("upload quota exceeded")
-            name = uuid.uuid4().hex + extension
             path = folder / name
             staging = self.data_dir / ".upload-staging"
             staging.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -336,47 +370,42 @@ class EnterpriseRAG:
                     stream.write(data)
                     stream.flush()
                     os.fsync(stream.fileno())
+                # Validate the candidate corpus before committing the file. A
+                # restart between promotion and swapping the in-memory index
+                # can then reload a fully validated document.
+                candidate = self._build_index([*self._index.chunks, *new_chunks])
                 # No partial document is ever visible in the indexed uploads folder.
                 os.replace(temporary, path)
-                self.refresh_index()
-            except Exception:
-                path.unlink(missing_ok=True)
-                raise
+                self._index = candidate
             finally:
                 temporary.unlink(missing_ok=True)
-            return {"source_id": "uploads/" + name, "indexed": True, "page_count": len(parsed)}
+            return {"source_id": source, "indexed": True, "page_count": len(parsed)}
 
-    def search_documents(self, query: str, role: str) -> list[dict[str, Any]]:
+    def can_access_document(self, role: str, source: str) -> bool:
+        roles = ("manager",) if source.startswith("uploads/") else (
+            self.policy.get("documents", {}).get(source, [])
+        )
+        return _document_permitted(source, role, roles, self.allowed(role))
+
+    def search_documents(
+        self, query: str, role: str, k: int = TOP_K,
+        *, distinct_sources: bool = False, ranking: str = "hybrid",
+    ) -> list[dict[str, Any]]:
         with self._lock:
-            return self._index.search(query, role, self.allowed(role))
+            return self._index.search(
+                query, role, self.allowed(role), k,
+                distinct_sources=distinct_sources, ranking=ranking,
+            )
+
+    def _read_database(self):
+        uri = (self.data_dir / "enterprise.db").resolve().as_uri() + "?mode=ro"
+        return closing(sqlite3.connect(uri, uri=True))
 
     def _sales(self, query: str, role: str) -> dict[str, Any]:
         if "sales_transactions" not in self.allowed(role):
             raise PermissionError("sales source unavailable to role")
-        # Refuse unsupported dimensions instead of silently broadening the query.
-        # These fixtures have neither customer/time-series dimensions nor general SQL.
-        forbidden = r"\b(average|mean|median|count|number|list|show|compare|comparison|growth|forecast|trend|previous|last|quarter|month|year|Q[1-4]|20[0-9]{2}|customer|tier|per|between|before|after)\b"
-        if re.search(forbidden, query, flags=re.I):
-            raise InsufficientEvidence("Unsupported aggregation, period or filter; please use a supported regional total.")
-        matches = re.findall(r"\b(EMEA|APAC|NA|North America|Asia Pacific)\b", query, flags=re.I)
-        # Explicit geographic prepositions must not silently become all-region sums.
-        qualifiers = re.findall(r"\b(?:for|from|in)\s+(?:the\s+)?([A-Za-z]+(?:\s+[A-Za-z]+)?)", query, flags=re.I)
-        valid_qualifiers = {
-            "EMEA", "APAC", "NA", "NORTH AMERICA", "ASIA PACIFIC",
-            "EMEA REGION", "APAC REGION", "NA REGION", "ALL REGIONS",
-        }
-        if any(value.strip().upper() not in valid_qualifiers for value in qualifiers):
-            raise InsufficientEvidence("Requested region or filter is not supported by the sample data.")
-        if qualifiers and not matches and not any(
-            value.strip().upper() == "ALL REGIONS" for value in qualifiers
-        ):
-            raise InsufficientEvidence("Requested region is not recognised in the sample data.")
-        regions = {"EMEA": "EMEA", "APAC": "APAC", "NA": "NA", "NORTH AMERICA": "NA", "ASIA PACIFIC": "APAC"}
-        wanted = {regions[m.upper()] for m in matches}
-        if len(wanted) > 1:
-            raise InsufficientEvidence("multiple regions requested; specify one")
-        region = next(iter(wanted)) if wanted else None
-        with sqlite3.connect(self.data_dir / "enterprise.db") as connection:
+        region = sales_region(query)
+        with self._read_database() as connection:
             if region:
                 result = connection.execute(
                     "SELECT COUNT(*), COALESCE(SUM(amount),0) FROM sales_transactions WHERE region = ?",
@@ -390,7 +419,7 @@ class EnterpriseRAG:
         label = region or "all regions"
         return {
             "status": "computed",
-            "answer": f"Recorded sample sales for {label}: ${total:,.0f} across {count} transactions.",
+            "answer": f"Recorded sample sales for {label}: ${total:,} across {count} transactions.",
             "citations": [{"source": "sales_transactions", "rows": count, "filter": region}],
             "evidence": [],
             "confidence": None,
@@ -400,8 +429,10 @@ class EnterpriseRAG:
     def _employees(self, role: str) -> dict[str, Any]:
         if "employees" not in self.allowed(role):
             raise PermissionError("employee source unavailable to role")
-        with sqlite3.connect(self.data_dir / "enterprise.db") as connection:
-            data = connection.execute("SELECT name, department FROM employees LIMIT 50").fetchall()
+        with self._read_database() as connection:
+            data = connection.execute(
+                "SELECT name, department FROM employees ORDER BY emp_id LIMIT 50"
+            ).fetchall()
         return {
             "status": "evidence_only",
             "answer": "Employee directory records returned from the allowed columns.",
@@ -427,16 +458,13 @@ class EnterpriseRAG:
     def query(self, query: str, identity: Identity) -> dict[str, Any]:
         if not query or len(query) > 2000:
             raise ValueError("question must be 1 to 2000 characters")
-        lower = query.casefold()
         role = identity.role
-        # Tool routing is deterministic and no LLM may construct arbitrary SQL.
-        if re.search(r"\b(employee|employees|staff directory)\b", lower) and not re.search(r"\b(handbook|document|pdf|policy)\b", lower):
+        intent = route(query)
+        if intent == "employees":
             return self._employees(role)
-        if re.search(r"\b(log|logs|alerts?|errors?|warnings?)\b", lower):
+        if intent == "logs":
             return self._logs(query, role)
-        if re.search(r"\b(sales?|transactions?|revenue|amounts?)\b", lower) and not re.search(
-            r"\b(report|pdf|document|policy|handbook)\b", lower
-        ):
+        if intent == "sales":
             return self._sales(query, role)
         evidence = self.search_documents(query, role)
         if not evidence:
@@ -499,13 +527,22 @@ def _model_answer(question: str, result: dict[str, Any]) -> dict[str, Any]:
             raise HTTPError(req.full_url, code, "redirect refused", headers, fp)
 
     request = Request(url, data=body, headers=headers, method="POST")
-    with build_opener(HTTPSHandler(), NoRedirect()).open(request, timeout=15) as response:
-        content = response.read(65_537)
+    # Do not implicitly forward questions, passages or credentials via a
+    # proxy inherited from the service process environment.
+    try:
+        with build_opener(ProxyHandler({}), HTTPSHandler(), NoRedirect()).open(
+            request, timeout=15
+        ) as response:
+            content = response.read(65_537)
+    except OSError as exc:
+        raise ModelResponseError("model transport failed") from exc
     if len(content) > 65_536:
-        raise ValueError("model response too large")
+        raise ModelResponseError("model response too large")
     try:
         parsed_reply = json.loads(content)
         payload = json.loads(parsed_reply["choices"][0]["message"]["content"])
+        if not isinstance(payload, dict):
+            raise ModelResponseError("invalid model response schema")
         answer, citations = payload.get("answer"), payload.get("citations")
     except (KeyError, IndexError, TypeError, ValueError) as exc:
         raise ModelResponseError("invalid model response schema") from exc

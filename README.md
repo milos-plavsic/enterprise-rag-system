@@ -12,15 +12,17 @@ not that a source entails an answer.
 
 ## Changes from the insecure prototype
 
-- Caller-supplied user_id was removed: bearer identity and role come from
-  server-side RAG_API_TOKENS_JSON only.
+- Caller-supplied user_id was removed. Bearer identity and role come from
+  server-side demo configuration or a verified JWT.
 - Actual PDF pages are parsed by pypdf instead of embedding hard-coded summaries.
 - BM25 is the offline baseline; optional dense rankings are combined using
   reciprocal rank fusion, not incomparable raw score magnitudes.
 - Original chunk IDs remain stable through permission-filtered ranking.
-- Sales queries use parameterized SQL with region filters; EMEA totals are
-  calculated from the sample dataset, not the separate report PDF.
-- Manager-only uploads have size, extension, parser, quota and path restrictions.
+- Sales queries use parameterized SQL with region filters. Only an overall
+  total or a total for one supported region is computed. Extra constraints
+  cause abstention instead of being silently dropped.
+- Manager-only uploads are authorised before multipart parsing. The request
+  and file are bounded, and the candidate index is validated before promotion.
 - SQL computations, evidence snippets and optional LLM synthesis have distinct
   output statuses. Unverified answer content is not labelled high confidence.
 - Tests cover authentication, role isolation, SQL totals, uploads, evidence IDs,
@@ -56,10 +58,13 @@ Run offline checks:
 
     python -m pytest -q
     python eval_benchmark.py
+    python eval_retrieval.py --ranking lexical --k 4
 
 GET /health is public. Protected routes are POST /v1/query and
 POST /v1/documents/upload. The previous user_id request parameter and
-GET /v1/users endpoint are intentionally removed.
+GET /v1/users endpoint are intentionally removed. Questions explicitly about
+a policy, handbook, report, or PDF use permission-filtered document retrieval,
+even if they mention logs, employees, or revenue.
 
 ## Enterprise OIDC verification (optional)
 
@@ -104,7 +109,7 @@ threat model, validation requirements, and known gaps.
 
 ## Important remaining work for real clients
 
-This demo does not implement enterprise OIDC/SSO, multi-tenant authorisation,
+This demo does not provide a deployed enterprise SSO integration or multi-tenant authorisation,
 centralised token revocation, a distributed rate limiter, sandboxed PDF
 extraction, AV scanning, a production document store, asynchronous indexing,
 secret management, penetration testing, a statistically representative

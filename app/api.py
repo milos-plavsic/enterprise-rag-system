@@ -7,13 +7,21 @@ import time
 from collections import defaultdict, deque
 from functools import lru_cache
 from pathlib import Path
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
+from python_multipart.exceptions import MultipartParseError
+from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import UploadFile
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.formparsers import MultiPartException
 from rag_service import EnterpriseRAG, Identity, TokenAuthenticator, InvalidDocument, InsufficientEvidence, ModelResponseError, MAX_UPLOAD_BYTES
 from auth_oidc import OIDCAuthenticator
 
 log = logging.getLogger("enterprise_rag.api")
 app = FastAPI(title="Permission-Aware Enterprise Retrieval", version="2.0.0")
+app.mount("/ui", StaticFiles(directory=Path(__file__).with_name("static"), html=True), name="ui")
+MAX_MULTIPART_BYTES = MAX_UPLOAD_BYTES + 65_536
 
 class QueryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -35,8 +43,19 @@ def authenticator() -> TokenAuthenticator | OIDCAuthenticator:
     return TokenAuthenticator()
 
 @lru_cache(maxsize=1)
-def backend() -> EnterpriseRAG:
+def _backend() -> EnterpriseRAG:
     return EnterpriseRAG(os.getenv("RAG_DATA_DIR", "data"))
+
+_backend_lock = threading.Lock()
+
+
+def backend() -> EnterpriseRAG:
+    # lru_cache alone permits concurrent initialisations on a cache miss.
+    with _backend_lock:
+        return _backend()
+
+
+backend.cache_clear = _backend.cache_clear
 
 class RateGate:
     """Local burst limit; distributed deployment also needs a gateway rate limit."""
@@ -94,21 +113,58 @@ def query(body: QueryRequest, identity: Identity = Depends(authenticated)) -> di
         log.exception("query failure")
         raise HTTPException(status_code=503, detail="query unavailable")
 
-@app.post("/v1/documents/upload", status_code=201)
-async def upload_document(file: UploadFile = File(...), identity: Identity = Depends(authenticated)) -> dict:
+@app.post(
+    "/v1/documents/upload", status_code=201,
+    openapi_extra={"requestBody": {"required": True, "content": {"multipart/form-data": {
+        "schema": {"type": "object", "required": ["file"],
+                   "properties": {"file": {"type": "string", "format": "binary"}}},
+    }}}},
+)
+async def upload_document(request: Request, identity: Identity = Depends(authenticated)) -> dict:
     if identity.role != "manager":
         raise HTTPException(status_code=403, detail="uploads require manager role")
-    extension = Path(file.filename or "").suffix.casefold()
-    if extension not in {".pdf", ".txt"}:
-        raise HTTPException(status_code=415, detail="only PDF and UTF-8 text are accepted")
+    if request.headers.get("content-type", "").partition(";")[0].strip().lower() != "multipart/form-data":
+        raise HTTPException(status_code=415, detail="multipart/form-data is required")
+
+    # Authorise before reading the body. Limit bytes as the multipart parser
+    # receives them, including when the caller omits Content-Length.
+    body_bytes = 0
+    limit_exceeded = False
+
+    async def bounded_receive():
+        nonlocal body_bytes, limit_exceeded
+        message = await request.receive()
+        body_bytes += len(message.get("body", b""))
+        if body_bytes > MAX_MULTIPART_BYTES:
+            limit_exceeded = True
+            # Starlette closes parser-owned temporary files on this exception.
+            raise MultiPartException("multipart request exceeds limit")
+        return message
+
+    bounded = Request(request.scope, receive=bounded_receive)
     try:
-        payload = await file.read(MAX_UPLOAD_BYTES + 1)
-        rag = backend()
-        return rag.upload(payload, extension, identity.role)
+        async with bounded.form(max_files=1, max_fields=0) as form:
+            file = form.get("file")
+            if not isinstance(file, UploadFile):
+                raise HTTPException(status_code=422, detail="exactly one file is required")
+            extension = Path(file.filename or "").suffix.casefold()
+            if extension not in {".pdf", ".txt"}:
+                raise HTTPException(status_code=415, detail="only PDF and UTF-8 text are accepted")
+            payload = await file.read(MAX_UPLOAD_BYTES + 1)
+
+        def index_document():
+            return backend().upload(payload, extension, identity.role)
+
+        return await run_in_threadpool(index_document)
+    except (StarletteHTTPException, MultiPartException, MultipartParseError) as exc:
+        if limit_exceeded:
+            raise HTTPException(status_code=413, detail="multipart request exceeds limit") from None
+        if isinstance(exc, StarletteHTTPException):
+            if exc.status_code != 400:
+                raise
+        raise HTTPException(status_code=400, detail="invalid multipart request") from None
     except InvalidDocument:
         raise HTTPException(status_code=400, detail="invalid or unsupported document")
     except Exception:
         log.exception("document upload failure")
         raise HTTPException(status_code=503, detail="upload unavailable")
-    finally:
-        await file.close()
