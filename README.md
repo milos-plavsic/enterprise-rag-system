@@ -89,8 +89,9 @@ operational assurance remain external validation requirements.
 Set RAG_EMBEDDING_MODEL to an approved Sentence Transformers model. This may
 download model weights. Review the licence, supply chain, deployment egress
 and model performance before enabling. The baseline does not require this.
-Optional dense and hybrid retrieval exclude candidates below a cosine score
-of 0.40 by default. Set `RAG_DENSE_MIN_SCORE` for a different approved model
+The dense ranking excludes candidates below a cosine score of 0.40 by default.
+Hybrid retrieval can still include candidates from its lexical ranking.
+Set `RAG_DENSE_MIN_SCORE` for a different approved model
 or corpus after validating precision and abstention on held-out labels. The
 floor is a heuristic, not an answer-confidence estimate.
 
