@@ -79,6 +79,7 @@ def main(image: str) -> None:
         (fixture / "keys" / "jwks").write_text(json.dumps({"keys": [
             {"kty": "RSA", "use": "sig", "alg": "RS256", "kid": "smoke",
              "n": b64(bytes.fromhex(modulus.decode().strip().split("=", 1)[1])).decode(), "e": "AQAB"}]}))
+        (fixture / "smoke_idp.py").write_bytes((ROOT / "scripts/smoke_idp.py").read_bytes())
         (fixture / "source.txt").write_text("Cedar reference manual for quarterly close.")
         audit = root / "audit-key"
         audit.write_text(os.urandom(32).hex())
@@ -96,7 +97,6 @@ def main(image: str) -> None:
     command: ["python", "/fixture/smoke_idp.py"]
     volumes:
       - {fixture}:/fixture:ro
-      - {ROOT / "scripts/smoke_idp.py"}:/fixture/smoke_idp.py:ro
 ''')
         env = {**os.environ, "RAG_IMAGE": image, "RAG_PORT": "0", "RAG_DATA_PATH": str(data),
                "RAG_AUDIT_KEY_PATH": str(audit), "RAG_OIDC_ISSUER": ISSUER,

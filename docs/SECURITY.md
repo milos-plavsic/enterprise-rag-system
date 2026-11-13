@@ -1,5 +1,7 @@
 # Security model and explicit limitations
 
+This page describes the demo unless stated otherwise. See [the separate production profile](PRODUCTION.md) for its controls and deployment gates.
+
 Assets include documents, SQL rows, logs, role data, upload files, model prompts
 and secrets. The client request, uploaded material, retrieved content and model
 responses are all untrusted inputs.
@@ -32,8 +34,9 @@ responses are all untrusted inputs.
   Real IdP integration, group-role governance, revocation, MFA, SSO policy
   and lifecycle testing are not provided by this repository.
 - Current roles are coarse; tenancy and row-level permissions are not present.
-- PDF extraction is in-process: untrusted uploads require isolated processing,
-  malware scanning and limits on CPU/memory beyond these Python checks.
+- The demo PDF child has resource bounds but shares the service container. The
+  production profile uses a dedicated networkless parser container. Organisations
+  still need a documented scanning/quarantine decision for their intake.
 - Local rate limiting does not work across distributed workers or hosts.
 - No production ingress TLS configuration, secrets manager, SIEM, audit-event
   integrity service, DLP review or external penetration testing is included.

@@ -128,7 +128,7 @@ secret management, penetration testing, a statistically representative
 human-labelled benchmark, or demonstrated business return. The offline
 answer baseline is extractive, not free-form LLM generation.
 
-The Docker image runs as a non-root user. Compose binds to local loopback.
+The demo Compose file builds `Dockerfile.demo`, runs as a non-root user and binds to local loopback. `Dockerfile` builds the separate production candidate.
 Do not expose the demo publicly or use it for confidential records.
 
 Licence: MIT.

@@ -1,5 +1,7 @@
 # Implementation notes
 
+This is the demo architecture. The [enterprise deployment candidate](docs/PRODUCTION.md) uses a separate data and deployment profile.
+
 This is an offline-first, single-worker retrieval prototype. The
 [README](README.md) describes supported requests and setup. The
 [security model](docs/SECURITY.md) and [evaluation guide](docs/EVALUATION.md)

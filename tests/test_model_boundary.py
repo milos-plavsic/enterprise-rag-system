@@ -36,6 +36,7 @@ def test_valid_generated_answer_is_explicitly_unverified(monkeypatch):
     assert out["status"]=="generated_unverified"
     assert "NOT verified" in out["limitations"]
     assert fake.input["messages"][1]["role"]=="user"
+    assert fake.input["max_tokens"] == 512
     serialized=fake.input["messages"][1]["content"]
     assert "Policy allows" in serialized
     assert "secret" not in serialized
