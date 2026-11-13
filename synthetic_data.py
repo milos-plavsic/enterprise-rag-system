@@ -10,7 +10,7 @@ DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 
 def create_pdf(name: str, title: str, lines: list[str]) -> None:
-    c = canvas.Canvas(str(DATA_DIR/name), pagesize=letter)
+    c = canvas.Canvas(str(DATA_DIR/name), pagesize=letter, invariant=1)
     c.setTitle(title)
     c.setFont("Helvetica-Bold",14)
     c.drawString(45,750,title)

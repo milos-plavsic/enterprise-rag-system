@@ -174,10 +174,7 @@ def main(image: str) -> None:
             docker("stop", "api")
             docker("run", "--rm", "--no-deps", "api", "python", "production_admin.py",
                    "--database", "/var/lib/rag/snapshot.sqlite3", "quarantine-restored-grants")
-            docker("run", "--rm", "--no-deps", "api", "python", "-c",
-                   "from pathlib import Path; p=Path('/var/lib/rag'); "
-                   "assert not (p/'catalog.sqlite3-wal').exists(); "
-                   "(p/'snapshot.sqlite3').replace(p/'catalog.sqlite3')")
+            admin("activate-restore", "/var/lib/rag/snapshot.sqlite3")
             docker("up", "-d", "--no-deps", "api")
             url = ready()
             assert ask(url, token_a, "Juniper")[0] == 403

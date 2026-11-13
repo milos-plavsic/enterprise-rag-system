@@ -17,6 +17,7 @@ import threading
 import uuid
 from contextlib import closing
 from dataclasses import dataclass
+from functools import lru_cache
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -147,6 +148,12 @@ def extract_pages(data: bytes, extension: str, *, parser_socket: str | None = No
         return parse_pdf(data, parser_socket)
     except ValueError as exc:
         raise InvalidDocument("PDF parsing failed") from exc
+
+
+@lru_cache(maxsize=8)
+def _demo_curated_pages(data: bytes, extension: str) -> tuple[str, ...]:
+    # Only operator-provisioned demo documents use this cache. Uploads never do.
+    return tuple(extract_pages(data, extension))
 
 
 def chunk_text(text: str, size: int = 900, overlap: int = 100) -> list[str]:
@@ -313,7 +320,7 @@ class EnterpriseRAG:
             if not isinstance(roles, list) or any(role not in self.policy["roles"] for role in roles):
                 raise RuntimeError("invalid document permission mapping")
             p = _safe_source_path(self.data_dir, name)
-            for page_num, page in enumerate(extract_pages(p.read_bytes(), p.suffix.lower()), start=1):
+            for page_num, page in enumerate(_demo_curated_pages(p.read_bytes(), p.suffix.lower()), start=1):
                 for number, text in enumerate(chunk_text(page), start=1):
                     chunks.append(Chunk(name, page_num, number, text, tuple(roles)))
         upload_dir = self.data_dir / "uploads"

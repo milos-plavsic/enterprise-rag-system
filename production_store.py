@@ -7,7 +7,7 @@ import os
 import sqlite3
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Iterator
 
@@ -75,10 +75,9 @@ class ProductionStore:
         fd = os.open(stage, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(fd)
         try:
-            with sqlite3.connect(stage) as db:
+            with closing(sqlite3.connect(stage)) as db:
                 db.executescript(f"BEGIN IMMEDIATE;\n{SOURCES}\nPRAGMA user_version={SCHEMA_VERSION};\nCOMMIT;")
                 db.execute("PRAGMA journal_mode=WAL").fetchone()
-            db.close()
             os.link(stage, self.path)
             self._sync_directory()
         finally:
@@ -227,12 +226,11 @@ class ProductionStore:
         fd = os.open(stage, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(fd)
         try:
-            with self.connect() as source, sqlite3.connect(stage) as snapshot:
+            with self.connect() as source, closing(sqlite3.connect(stage)) as snapshot:
                 source.backup(snapshot, pages=256)
                 snapshot.execute("PRAGMA journal_mode=DELETE").fetchone()
                 if snapshot.execute("PRAGMA integrity_check").fetchone() != ("ok",):
                     raise RuntimeError("snapshot failed integrity check")
-            snapshot.close()
             with stage.open("rb") as stream:
                 os.fsync(stream.fileno())
             os.link(stage, destination)

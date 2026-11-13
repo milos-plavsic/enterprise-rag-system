@@ -4,10 +4,41 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
+from production_runtime import deployment_lock
 from production_store import ProductionStore, ROLES
 from rag_service import MAX_UPLOAD_BYTES, extract_pages
+
+
+def activate_restore(active: ProductionStore, staged_path: Path) -> None:
+    """Offline replacement after a quarantined snapshot is reconciled."""
+    staged = ProductionStore(staged_path)
+    if staged.path == active.path or staged.path.parent != active.path.parent:
+        raise ValueError("restore requires a different staged file on the same volume")
+    with deployment_lock(active.path):
+        with staged.connect(write=True) as db:
+            if db.execute("PRAGMA integrity_check").fetchone() != ("ok",):
+                raise RuntimeError("invalid staged snapshot")
+            if (db.execute("SELECT 1 FROM principals LIMIT 1").fetchone() or
+                    not db.execute("SELECT 1 FROM policy_history WHERE event='restore_quarantine' LIMIT 1").fetchone()):
+                raise RuntimeError("stage must be quarantined with no active grants")
+        # SQLite may leave sidecars after the last read-only connection closes.
+        # Have SQLite checkpoint and remove them itself, never unlink a WAL manually.
+        for path in (active.path, staged.path):
+            with closing(sqlite3.connect(f"{path.as_uri()}?mode=rw", uri=True, timeout=2)) as db:
+                if db.execute("PRAGMA journal_mode=DELETE").fetchone() != ("delete",):
+                    raise RuntimeError("unable to close old WAL journal")
+            if any(path.with_name(path.name + suffix).exists() for suffix in ("-wal", "-shm", "-journal")):
+                raise RuntimeError("database still has an open journal")
+        # Re-enable WAL on the staged inode before atomic activation.
+        with closing(sqlite3.connect(staged.path)) as db:
+            if db.execute("PRAGMA journal_mode=WAL").fetchone() != ("wal",):
+                raise RuntimeError("unable to enable WAL for restored database")
+        os.replace(staged.path, active.path)
+        active._sync_directory()
 
 
 def main() -> None:
@@ -29,6 +60,8 @@ def main() -> None:
     acl.add_argument("source")
     acl.add_argument("--role", choices=sorted(ROLES), action="append", default=[])
     commands.add_parser("quarantine-restored-grants")
+    restore = commands.add_parser("activate-restore")
+    restore.add_argument("staged", type=Path)
     remove = commands.add_parser("delete")
     remove.add_argument("source")
     backup = commands.add_parser("backup")
@@ -58,6 +91,8 @@ def main() -> None:
             cli.error("published document not found")
     elif args.command == "quarantine-restored-grants":
         db.clear_principals_for_restore()
+    elif args.command == "activate-restore":
+        activate_restore(db, args.staged)
     elif args.command == "delete":
         if not db.delete(args.source):
             cli.error("document not found")

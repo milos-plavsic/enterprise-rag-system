@@ -231,3 +231,23 @@ def test_parser_subprocess_regular_document_and_timeout(monkeypatch):
         patch.setattr("pdf_transport.subprocess.run", timeout)
         assert isolated_parse(buffer.getvalue()) == b""
     assert b"Worker text extraction" in isolated_parse(buffer.getvalue())
+
+
+def test_restore_activation_requires_quarantine_and_stopped_service(production, tmp_path):
+    from production_admin import activate_restore
+
+    _, db, _, _ = production
+    snapshot = tmp_path / "activate.sqlite3"
+    db.backup(snapshot)
+    with pytest.raises(RuntimeError, match="one API process"):
+        activate_restore(db, snapshot)
+    separate = ProductionStore(tmp_path / "separate.sqlite3")
+    separate.initialize()
+    with pytest.raises(RuntimeError, match="quarantined"):
+        activate_restore(separate, snapshot)
+    ProductionStore(snapshot).clear_principals_for_restore()
+    assert not separate.entitled(Identity("alice", "manager", int(time.time()) + 2))
+    activate_restore(separate, snapshot)
+    assert not snapshot.exists()
+    separate.readiness()
+    assert not separate.entitled(Identity("alice", "manager", int(time.time()) + 2))
