@@ -18,6 +18,7 @@ import threading
 import uuid
 from contextlib import closing
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -28,7 +29,7 @@ from pypdf import PdfReader
 from rank_bm25 import BM25Okapi
 
 from query_intent import InsufficientEvidence as InsufficientEvidence
-from query_intent import route, sales_region
+from query_intent import LOG_LEVEL_ALIASES, LOG_QUERY_WORDS, require_directory_list, route, sales_region
 
 log = logging.getLogger("enterprise_rag")
 WORDS = re.compile(r"[\w]+(?:[-'][\w]+)*", re.UNICODE)
@@ -38,6 +39,7 @@ MAX_EXTRACTED_CHARS = 250_000
 MAX_DOCUMENTS = 100
 MAX_CHUNKS = 3_000
 TOP_K = 4
+DEFAULT_DENSE_MIN_SCORE = 0.40
 
 
 class InvalidDocument(ValueError):
@@ -193,11 +195,17 @@ def reciprocal_rank_fusion(rankings: list[list[int]], k: int = 60) -> dict[int, 
 
 class DocumentIndex:
     """Index IDs are immutable chunk identities; permissions are applied BEFORE scoring."""
-    def __init__(self, chunks: list[Chunk], embedder: Any = None):
+    def __init__(
+        self, chunks: list[Chunk], embedder: Any = None, *,
+        dense_min_score: float = DEFAULT_DENSE_MIN_SCORE,
+    ):
         if len(chunks) > MAX_CHUNKS:
             raise InvalidDocument("too many indexed chunks")
+        if not 0.0 <= dense_min_score <= 1.0:
+            raise ValueError("dense cosine floor must be between zero and one")
         self.chunks = tuple(chunks)
         self._embedder = embedder
+        self._dense_min_score = dense_min_score
         self._terms = [tokens(c.text) for c in chunks]
         self._lexical_cache: dict[tuple[int, ...], BM25Okapi] = {}
         self._vectors = None
@@ -263,7 +271,7 @@ class DocumentIndex:
                         raise ValueError("embedding dimension mismatch")
                     norm_v = math.sqrt(sum(x * x for x in v))
                     score = sum(x*y for x,y in zip(qvector, v)) / (norm_q * norm_v) if norm_v else 0
-                    if score >= 0.20:
+                    if norm_v and score >= self._dense_min_score:
                         scored.append((score, i))
             scored.sort(key=lambda pair: (-pair[0], self.chunks[pair[1]].id))
             if scored:
@@ -304,6 +312,10 @@ class EnterpriseRAG:
         if model and embedder is None:
             from sentence_transformers import SentenceTransformer
             self._embedder = SentenceTransformer(model)
+        self.dense_min_score = (
+            float(os.getenv("RAG_DENSE_MIN_SCORE", str(DEFAULT_DENSE_MIN_SCORE)))
+            if self._embedder is not None else DEFAULT_DENSE_MIN_SCORE
+        )
         self.refresh_index()
 
     def allowed(self, role: str) -> set[str]:
@@ -338,7 +350,7 @@ class EnterpriseRAG:
             self._index = self._build_index(self._load_chunks())
 
     def _build_index(self, chunks: list[Chunk]) -> DocumentIndex:
-        return DocumentIndex(chunks, self._embedder)
+        return DocumentIndex(chunks, self._embedder, dense_min_score=self.dense_min_score)
 
     def upload(self, data: bytes, extension: str, role: str) -> dict[str, Any]:
         if role != "manager":
@@ -426,9 +438,10 @@ class EnterpriseRAG:
             "limitations": "This is an aggregate of the demo transaction table, not an independently audited company revenue figure.",
         }
 
-    def _employees(self, role: str) -> dict[str, Any]:
+    def _employees(self, query: str, role: str) -> dict[str, Any]:
         if "employees" not in self.allowed(role):
             raise PermissionError("employee source unavailable to role")
+        require_directory_list(query)
         with self._read_database() as connection:
             data = connection.execute(
                 "SELECT name, department FROM employees ORDER BY emp_id LIMIT 50"
@@ -444,14 +457,32 @@ class EnterpriseRAG:
     def _logs(self, query: str, role: str) -> dict[str, Any]:
         if "logs.json" not in self.allowed(role):
             raise PermissionError("log source unavailable to role")
-        entries = json.loads((self.data_dir / "logs.json").read_text("utf-8"))
-        terms = set(tokens(query)) - {"show", "me", "the", "recent", "logs", "log", "please", "what", "are"}
-        relevant = [row for row in entries if not terms or any(term in (row["level"]+" "+row["msg"]).casefold() for term in terms)]
+        terms = set(tokens(query)) - LOG_QUERY_WORDS
+        levels = {LOG_LEVEL_ALIASES[term] for term in terms if term in LOG_LEVEL_ALIASES}
+        message_terms = terms.difference(LOG_LEVEL_ALIASES)
+        relevant = []
+        try:
+            entries = json.loads((self.data_dir / "logs.json").read_text("utf-8"))
+            if not isinstance(entries, list):
+                raise TypeError("expected a list of records")
+            for row in entries:
+                timestamp = datetime.fromisoformat(row["timestamp"])
+                if timestamp.utcoffset() is None:
+                    raise ValueError("log timestamp must have an offset")
+                level = row["level"].upper()
+                if (not levels or level in levels) and message_terms.issubset(tokens(row["msg"])):
+                    # Return only the fields documented for the demo log source.
+                    relevant.append((timestamp, {
+                        "timestamp": row["timestamp"], "level": level, "msg": row["msg"],
+                    }))
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("invalid log data") from exc
+        relevant.sort(key=lambda item: item[0], reverse=True)
         return {
             "status": "evidence_only",
             "answer": f"Found {len(relevant)} matching authorised log records.",
             "citations": [{"source": "logs.json", "count": len(relevant)}],
-            "evidence": relevant[:20],
+            "evidence": [row for _, row in relevant[:20]],
             "confidence": None,
         }
 
@@ -461,7 +492,7 @@ class EnterpriseRAG:
         role = identity.role
         intent = route(query)
         if intent == "employees":
-            return self._employees(role)
+            return self._employees(query, role)
         if intent == "logs":
             return self._logs(query, role)
         if intent == "sales":

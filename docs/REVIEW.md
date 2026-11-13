@@ -36,6 +36,13 @@ honest documentation, and functional/negative regression tests.
   validation ahead of file promotion. Kept blocking index work off the API
   event loop.
 
+The separate Astra High review of `d975908` requested changes for severity
+aliases and log ordering, and flagged obsolete architecture claims. The
+follow-up normalises severity aliases, sorts records by timezone-aware
+timestamps before applying the limit, and replaces the obsolete notes.
+It also rejects unsupported directory filters and documents the configurable
+dense retrieval score floor.
+
 ## Open independent sign-off gates
 
 - Real provider OIDC/SSO integration, role governance and revocation beyond the included JWT verifier.

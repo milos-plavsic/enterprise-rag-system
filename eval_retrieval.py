@@ -50,6 +50,7 @@ def evaluate_retrieval(
     return {
         "cases":len(cases),"labelled_answerable":len(recalls),
         "ranking":ranking,"ranking_unit":"distinct source","k":k,
+        "dense_min_score":getattr(rag, "dense_min_score", None) if ranking != "lexical" else None,
         "recall_at_k":mean(recalls),"precision_at_k":mean(precisions),
         "mrr":mean(ranks),"ndcg_at_k":mean(ndcgs),
         "correct_abstentions":sum(abstention_checks),

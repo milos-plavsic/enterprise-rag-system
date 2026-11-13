@@ -26,6 +26,7 @@ def environment(tmp_path, monkeypatch):
     monkeypatch.setenv("RAG_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("RAG_API_TOKENS_JSON", json.dumps(TOKENS))
     monkeypatch.delenv("RAG_EMBEDDING_MODEL", raising=False)
+    monkeypatch.delenv("RAG_DENSE_MIN_SCORE", raising=False)
     monkeypatch.delenv("RAG_LLM_MODEL", raising=False)
     monkeypatch.delenv("RAG_OIDC_JWKS_URL", raising=False)
     monkeypatch.delenv("RAG_OIDC_ISSUER", raising=False)

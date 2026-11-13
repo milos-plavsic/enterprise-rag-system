@@ -66,6 +66,11 @@ GET /v1/users endpoint are intentionally removed. Questions explicitly about
 a policy, handbook, report, or PDF use permission-filtered document retrieval,
 even if they mention logs, employees, or revenue.
 
+For the synthetic directory, ask to list employees or employee names and
+departments. Filtered directory requests abstain. Operational log results
+recognise level aliases such as errors and warnings, apply message keywords
+as an additional filter, and show up to 20 matches in newest-first order.
+
 ## Enterprise OIDC verification (optional)
 
 Instead of RAG_API_TOKENS_JSON, configure RAG_OIDC_JWKS_URL (HTTPS),
@@ -84,6 +89,10 @@ operational assurance remain external validation requirements.
 Set RAG_EMBEDDING_MODEL to an approved Sentence Transformers model. This may
 download model weights. Review the licence, supply chain, deployment egress
 and model performance before enabling. The baseline does not require this.
+Optional dense and hybrid retrieval exclude candidates below a cosine score
+of 0.40 by default. Set `RAG_DENSE_MIN_SCORE` for a different approved model
+or corpus after validating precision and abstention on held-out labels. The
+floor is a heuristic, not an answer-confidence estimate.
 
 ## Optional LLM synthesis
 

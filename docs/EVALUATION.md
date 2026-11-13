@@ -14,6 +14,11 @@ and hybrid comparisons, install the optional ML dependencies, set
 and `--ranking hybrid`. Keep the data, questions, and cutoff fixed.
 `--data-dir` and `--fixture` allow a separately labelled corpus and test set.
 
+The dense cosine floor is 0.40 by default. The comparison records the active
+floor. Use `RAG_DENSE_MIN_SCORE` for model-specific experiments, and choose
+it with separate development and held-out data. The default is a conservative
+demo operating point, not a calibrated probability or a universal threshold.
+
 The ranking unit is a distinct source, not a chunk. The best-ranked chunk
 represents its source and duplicate sources are removed before applying k.
 Precision@k divides by k, counting empty slots as misses. Recall@k divides
