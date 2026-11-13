@@ -51,3 +51,5 @@ For a production evaluation:
 A deployable release requires independent security review, real-data validation,
 an approved privacy/data contract, load testing and a documented go/no-go decision.
 These external gates are NOT yet met.
+
+The separate production profile uses `eval_production.py` for offline, held-out document retrieval evaluation against independently supplied permission and relevance labels. See [deployment gates](PRODUCTION.md#release-gates-still-requiring-an-enterprise-environment).

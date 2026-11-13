@@ -1,0 +1,57 @@
+# Run beside an enterprise TLS ingress. Do not publish the API directly.
+name: enterprise-rag
+x-runtime: &runtime
+  image: ${RAG_IMAGE:?set the approved image by digest}
+  user: "10001:10001"
+  init: true
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777"]
+services:
+  api:
+    <<: *runtime
+    environment:
+      RAG_PROFILE: production
+      RAG_PRODUCTION_DB: /var/lib/rag/catalog.sqlite3
+      RAG_PARSER_SOCKET: /run/rag-parser/worker.sock
+      RAG_AUDIT_KEY_FILE: /run/secrets/rag_audit_key
+      RAG_OIDC_ISSUER: ${RAG_OIDC_ISSUER:?set the enterprise access token issuer}
+      RAG_OIDC_AUDIENCE: ${RAG_OIDC_AUDIENCE:?set the enterprise API audience}
+      RAG_OIDC_JWKS_URL: ${RAG_OIDC_JWKS_URL:?set the approved HTTPS JWKS endpoint}
+      RAG_OIDC_ROLE_CLAIM: ${RAG_OIDC_ROLE_CLAIM:-enterprise_role}
+      OPENBLAS_NUM_THREADS: "1"
+    ports: ["127.0.0.1:${RAG_PORT:-8000}:8000"]
+    volumes:
+      - type: bind
+        source: ${RAG_DATA_PATH:?set the provisioned durable directory}
+        target: /var/lib/rag
+        bind: {create_host_path: false}
+      - parser-ipc:/run/rag-parser:ro
+    secrets: [rag_audit_key]
+    depends_on:
+      parser: {condition: service_started}
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 2
+    stop_grace_period: 25s
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/ready', timeout=6).close()"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 15s
+  parser:
+    <<: *runtime
+    command: ["python", "pdf_daemon.py", "/run/rag-parser/worker.sock"]
+    network_mode: none
+    volumes: ["parser-ipc:/run/rag-parser"]
+    pids_limit: 16
+    mem_limit: 320m
+    cpus: 1
+volumes:
+  parser-ipc:
+secrets:
+  rag_audit_key:
+    file: ${RAG_AUDIT_KEY_PATH:?set the path to the provisioned audit key}

@@ -10,14 +10,18 @@ jobs:
   static:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
-      - run: python -m pip install -r requirements.txt ruff bandit pip-audit
-      - run: ruff check --select F rag_service.py auth_oidc.py app/api.py query_intent.py eval_benchmark.py eval_retrieval.py
-      - run: bandit -q -r rag_service.py auth_oidc.py app -ll
-      - run: pip-audit --progress-spinner off
+      - run: >-
+          python -m pip install --require-hashes --only-binary=:all: -r requirements-test.lock
+      - run: pipx install ruff && pipx install bandit && pipx install pip-audit
+      - run: ruff check --select F app scripts *.py
+      - run: bandit -q -r app rag_service.py auth_oidc.py production_admin.py production_runtime.py production_store.py pdf_daemon.py pdf_transport.py pdf_worker.py -ll
+      - run: pip-audit --progress-spinner off --require-hashes -r requirements-runtime.lock
   codeql:
     name: CodeQL (Python)
     runs-on: ubuntu-latest
@@ -25,8 +29,10 @@ jobs:
       security-events: write
       contents: read
     steps:
-      - uses: actions/checkout@v5
-      - uses: github/codeql-action/init@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@5895b2c9be147bc7f1c75ce72c5cb577febb1907 # v4
         with:
           languages: python
-      - uses: github/codeql-action/analyze@v4
+      - uses: github/codeql-action/analyze@5895b2c9be147bc7f1c75ce72c5cb577febb1907 # v4

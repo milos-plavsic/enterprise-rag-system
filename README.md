@@ -1,5 +1,7 @@
 # Permission-Aware Enterprise Retrieval (experimental v2)
 
+For the separate, evidence-only enterprise deployment candidate, see [deployment and release gates](docs/PRODUCTION.md). The demo below is not a production deployment.
+
 Python demonstration of authenticated, permission-filtered retrieval over actual
 PDF text, SQLite transactions and JSON logs. Optional sentence-transformer
 embeddings and OpenAI-compatible citation-constrained synthesis are supported.
