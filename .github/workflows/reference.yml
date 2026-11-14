@@ -8,7 +8,7 @@ permissions:
   contents: read
 jobs:
   reference:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -23,6 +23,7 @@ jobs:
       - name: Verify reference identity and document lifecycle in Chromium
         env:
           NODE_PATH: .github/reference-browser/node_modules
+          RAG_LAB_TEST_MODEL: "1"
         run: bash scripts/reference_compose_smoke.sh "$RUNNER_TEMP/juniper-lab"
       - name: Run the fictional benchmark in the application image
         run: |

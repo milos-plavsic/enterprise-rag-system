@@ -11,7 +11,8 @@ from rag_service import tokens
 
 SLOTS = threading.BoundedSemaphore(1)
 MAX_RESPONSE = 16_384
-MAX_CHOICES = 16
+MAX_CHOICES = 8
+MAX_CONTEXT_CHARS = 2000
 DEADLINE = 12
 SENTENCES = re.compile(r"(?<=[.!?])\s+")
 
@@ -72,10 +73,13 @@ GENERIC = frozenset("a an the does do is in to on and of be are for what how whe
 def choose(question: str, evidence: list[dict], selector) -> list[tuple[dict, str]]:
     query_terms = set(tokens(question)) - GENERIC
     candidates = []
+    size = 0
     for row in evidence:
         for phrase in SENTENCES.split(row["text"]):
-            if 10 <= len(phrase) <= 400 and query_terms.intersection(tokens(phrase)):
+            if (10 <= len(phrase) <= 400 and size + len(phrase) <= MAX_CONTEXT_CHARS
+                    and query_terms.intersection(tokens(phrase))):
                 candidates.append((row, phrase))
+                size += len(phrase)
             if len(candidates) == MAX_CHOICES:
                 break
         if len(candidates) == MAX_CHOICES:

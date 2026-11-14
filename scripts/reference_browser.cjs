@@ -39,6 +39,13 @@ const search = async page => {
     await page.getByText('Signed in.', {exact:true}).waitFor();
     await search(page);
     await page.getByText(/exceeds 250 credits/).first().waitFor();
+    if (process.env.RAG_LAB_TEST_MODEL === '1') {
+      await page.locator('#synth').check();
+      await search(page);
+      await page.getByText('Local model selected these source quotes.',{exact:true}).waitFor();
+      await page.getByText(/exceeds 250 credits/).first().waitFor();
+      await page.locator('#synth').uncheck();
+    }
     await page.getByRole('link', {name:'Open verified passage'}).first().click();
     await page.getByText('Current authorised passage.', {exact:true}).waitFor();
     const oldLink = new URL(page.url()).hash;
