@@ -26,7 +26,11 @@ Uploaded documents are manager-only and private to the authenticated uploader, n
 
 ## Upgrade notes
 
-Catalog schema 3 retains existing grants but extends each legacy token cutoff by the configured five-second clock-skew allowance. With the old service stopped and an independently verified backup retained, run `production_admin.py migrate` using the new image before startup. Migration also supports schema 1 directly. Migrate a schema 1 or 2 snapshot offline before using it with the new image. An old binary requires a compatible pre-migration snapshot for rollback, with current access and deletions reconciled before serving.
+Catalog schema 3 retains existing grants but extends each legacy token cutoff by the configured five-second clock-skew allowance. With the old service stopped and an independently verified backup retained, run `production_admin.py migrate` using the new image before startup. Migration also supports schema 1 directly. Migrate a schema 1 or 2 snapshot offline before using it with the new image. An old binary requires a compatible pre-migration snapshot. Do not use `activate-restore` across schemas. Either roll forward with a schema-compatible repair or roll back on a separate encrypted volume as follows:
+
+1. Stop the API and operator jobs, close ingress, and leave the migrated volume unchanged. Copy the verified pre-migration snapshot into a new UID-owned `0700` volume as `catalog.sqlite3`.
+2. Point `RAG_DATA_PATH` at the new volume and `RAG_IMAGE` at the verified previous digest. With that image's operator CLI, clear snapshot grants and reconcile all changes to managed and individually published documents against the current authoritative source. If the old schema or tooling cannot represent the required current policies, do not serve the old snapshot. Roll forward instead.
+3. Start the previous image against only the new volume, still behind closed ingress. Check readiness and known-denied access, regrant only current subjects, then validate positive access with fresh tokens. Keep the original migrated volume available for a forward recovery. Rehearse this with the actual previous image before adopting it as a rollback plan.
 
 ## Recovery and monitoring
 
@@ -43,7 +47,7 @@ Catalog schema 3 retains existing grants but extends each legacy token cutoff by
 The recovery JSON must contain exactly three fields:
 
 - `source_manifest_sha256` is the SHA-256 of the current complete managed-source `manifest.json`, or `null` if no managed documents are approved. Supply `--source` for a non-null value. Managed files are verified against the manifest and reconciled, including ACLs, current versions and withdrawals. A null manifest removes all managed documents from the recovered corpus.
-- `source_history` maps every managed key, including withdrawals, to its highest authoritative version. Use `{}` if the manifest is null. Keep this record outside the failed volume alongside the approved release. It prevents resurrecting an old document version after losing the original catalog's history.
+- `source_history` maps every managed key, including withdrawals, to its highest authoritative version. Include withdrawal history even when the manifest is null. Use `{}` only if there is no managed history. Keep this record outside the failed volume alongside the approved release. It prevents resurrecting an old document version after losing the original catalog's history.
 - `unmanaged` is the complete current allowlist of individually published or owner-private documents you choose to recover. Each row contains `id`, `sha256` of the original file, `owner` (subject or `null`), and `roles` (empty for private documents). Omitted documents are removed. An approved document that is missing from the snapshot, or whose digest or owner differs, stops recovery. A partial recovery must be explicitly authorised by the inventory, not inferred by the tool.
 
 ```sh

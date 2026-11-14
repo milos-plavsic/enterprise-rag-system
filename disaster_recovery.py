@@ -10,7 +10,7 @@ import tempfile
 from contextlib import closing
 from pathlib import Path
 
-from document_source import sync
+from document_source import KEY, sync
 from production_runtime import deployment_lock
 from production_store import ProductionStore, ROLES, validate_subject
 from rag_service import MAX_DOCUMENTS
@@ -41,8 +41,8 @@ def _authority(path: Path, expected: str) -> dict:
             or not isinstance(unmanaged, list) or len(unmanaged) > MAX_DOCUMENTS):
         raise ValueError("invalid recovery record entries")
     history = record["source_history"]
-    if (not isinstance(history, dict) or (manifest is None and history) or any(
-        not re.fullmatch(r"[a-z][a-z0-9-]{0,62}", key) or type(version) is not int or not 1 <= version < 2**63
+    if (not isinstance(history, dict) or any(
+        not KEY.fullmatch(key) or type(version) is not int or not 1 <= version < 2**63
         for key, version in history.items()
     )):
         raise ValueError("invalid authoritative source history")
@@ -116,15 +116,14 @@ def recover(active: ProductionStore, snapshot_path: Path, authority_path: Path, 
                 sync(stage, source, parser_socket=parser_socket, recovery_manifest_sha256=manifest)
             with stage.connect(write=True) as db:
                 require_quarantine(db)
-                if manifest is not None:
-                    history = record["source_history"]
-                    recovered = dict(db.execute("SELECT source_key,version FROM source_history"))
-                    current = dict(db.execute("SELECT source_key,version FROM documents WHERE source_key IS NOT NULL"))
-                    if (any(history.get(key, 0) < version for key, version in recovered.items())
-                            or any(history.get(key) != version for key, version in current.items())):
-                        raise RuntimeError("authoritative version history disagrees with the reconciled catalog")
-                    db.executemany("INSERT INTO source_history VALUES (?,?) ON CONFLICT(source_key) "
-                                   "DO UPDATE SET version=excluded.version", history.items())
+                history = record["source_history"]
+                recovered = dict(db.execute("SELECT source_key,version FROM source_history"))
+                current = dict(db.execute("SELECT source_key,version FROM documents WHERE source_key IS NOT NULL"))
+                if (any(history.get(key, 0) < version for key, version in recovered.items())
+                        or any(history.get(key) != version for key, version in current.items())):
+                    raise RuntimeError("authoritative version history disagrees with the reconciled catalog")
+                db.executemany("INSERT INTO source_history VALUES (?,?) ON CONFLICT(source_key) "
+                               "DO UPDATE SET version=excluded.version", history.items())
                 if (db.execute("PRAGMA integrity_check").fetchall() != [("ok",)]
                         or db.execute("PRAGMA foreign_key_check").fetchone()):
                     raise RuntimeError("reconciled catalog integrity check failed")

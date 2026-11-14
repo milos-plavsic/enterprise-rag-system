@@ -70,7 +70,9 @@ def test_recovery_fails_closed_and_preserves_the_snapshot(tmp_path):
     sync(live, source)
     snapshot = tmp_path / "backup.sqlite3"
     live.backup(snapshot)
-    approved, digest = authority(tmp_path)
+    history = {item["key"]: item["version"] for item in json.loads((source / "manifest.json").read_bytes())["documents"]}
+    history["withdrawn-after-snapshot"] = 4
+    approved, digest = authority(tmp_path, history=history)
     with pytest.raises(RuntimeError, match="active catalog is readable"):
         recover(live, snapshot, approved, digest)
     live.path.unlink()
@@ -88,6 +90,7 @@ def test_recovery_fails_closed_and_preserves_the_snapshot(tmp_path):
     recover(live, snapshot, approved, digest)
     with live.connect() as db:
         assert db.execute("SELECT COUNT(*) FROM documents").fetchone() == (0,)
+        assert dict(db.execute("SELECT source_key,version FROM source_history")) == history
 
 
 def test_recovery_replays_equal_release_against_approved_source(tmp_path):
