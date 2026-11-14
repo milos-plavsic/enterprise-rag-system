@@ -1,19 +1,29 @@
 <!DOCTYPE html>
 <html lang="en">
-<head><meta charset="utf-8"/><title>Enterprise RAG</title></head>
-<body style="font-family:system-ui;max-width:800px;margin:2rem auto">
-<h1>Enterprise RAG (RBAC)</h1>
-<label>User <select id="user"><option>alice</option><option>bob</option><option>charlie</option></select></label>
-<textarea id="q" rows="3" style="width:100%">What is total EMEA revenue?</textarea>
-<button id="ask">Query</button>
-<pre id="out"></pre>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Permission-Aware Retrieval</title></head>
+<body style="font-family:system-ui;max-width:780px;margin:2rem auto;padding:0 1rem">
+<h1>Permission-Aware Enterprise Retrieval</h1>
+<p>Local demo only. Supply a server-provisioned bearer token. Never paste a real production secret into an untrusted page.</p>
+<label>Bearer token <input id="token" type="password" autocomplete="off" style="width:100%"></label>
+<label>Question <textarea id="query" rows="3" style="width:100%">What is total EMEA revenue?</textarea></label>
+<button id="ask">Submit</button><pre id="result" role="status"></pre>
 <script>
-const b=location.origin.replace(/\/ui\/?$/,'');
-document.getElementById('ask').onclick=async()=>{
-  const body={user_id:document.getElementById('user').value,query:document.getElementById('q').value};
-  const r=await fetch(b+'/v1/query',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  document.getElementById('out').textContent=JSON.stringify(await r.json(),null,2);
-};
+document.getElementById("ask").addEventListener("click", async () => {
+  const token = document.getElementById("token").value;
+  const question = document.getElementById("query").value;
+  const out = document.getElementById("result");
+  out.textContent = "Loading...";
+  try {
+    const response = await fetch("/v1/query", {
+      method:"POST",
+      headers:{"Content-Type":"application/json", "Authorization":"Bearer "+token},
+      body:JSON.stringify({query:question})
+    });
+    out.textContent = JSON.stringify({status:response.status,result:await response.json()},null,2);
+  } catch {
+    out.textContent = "Request failed";
+  }
+});
 </script>
-</body>
-</html>
+</body></html>

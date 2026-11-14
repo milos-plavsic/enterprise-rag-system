@@ -1,0 +1,267 @@
+from __future__ import annotations
+import json
+from pathlib import Path
+import pytest
+from rag_service import (
+    Chunk, DocumentIndex, EnterpriseRAG, Identity, InvalidDocument,
+    TokenAuthenticator, reciprocal_rank_fusion,
+)
+from conftest import auth, TOKENS
+
+def test_health(client):
+    assert client.get("/health").json() == {"status":"ok"}
+
+def test_no_authentication(client):
+    response = client.post("/v1/query", json={"query":"revenue EMEA"})
+    assert response.status_code == 401
+
+def test_unknown_bearer_cannot_assert_role(client):
+    response = client.post("/v1/query",
+        headers={"Authorization":"Bearer "+"F"*48},
+        json={"query":"list employees","user_id":"bob"})
+    assert response.status_code == 401
+
+def test_role_not_selected_by_body(client):
+    response = client.post("/v1/query", headers=auth("analyst"),
+        json={"query":"employees","user_id":"bob"})
+    assert response.status_code == 422
+
+def test_sales_filter_is_correct(client):
+    body=client.post("/v1/query", headers=auth("analyst"),
+        json={"query":"What is total EMEA revenue?"}).json()
+    assert body["status"]=="computed"
+    assert "$75,000" in body["answer"]
+    assert body["citations"][0]["filter"]=="EMEA"
+    assert body["citations"][0]["rows"]==2
+
+def test_all_regions_and_ambiguous_region(client):
+    answer=client.post("/v1/query",headers=auth("analyst"),json={"query":"Total sales"}).json()
+    assert "$225,000" in answer["answer"]
+    ambiguous=client.post("/v1/query",headers=auth("analyst"),
+        json={"query":"Compare sales EMEA and APAC"}).json()
+    assert ambiguous["status"]=="abstained"
+
+def test_employee_permission(client):
+    denied=client.post("/v1/query",headers=auth("analyst"),json={"query":"List employees"})
+    assert denied.status_code==403
+    allowed=client.post("/v1/query",headers=auth("manager"),
+        json={"query":"List employees"})
+    assert allowed.status_code==200
+    assert allowed.json()["status"]=="evidence_only"
+    assert all(set(x)=={"name","department"} for x in allowed.json()["evidence"])
+
+def test_auditor_role_and_source_isolation(client):
+    denied=client.post("/v1/query",headers=auth("analyst"),
+        json={"query":"recent error logs"})
+    assert denied.status_code==403
+    allowed=client.post("/v1/query",headers=auth("auditor"),
+        json={"query":"recent error logs"}).json()
+    assert allowed["citations"][0]["source"]=="logs.json"
+    financial=client.post("/v1/query",headers=auth("auditor"),
+        json={"query":"financial report revenue"}).json()
+    assert all(x["source"]!="financial_report.pdf" for x in financial.get("citations",[]))
+
+def test_real_pdf_content_used(environment):
+    rag=EnterpriseRAG(environment)
+    sources={x.source for x in rag._index.chunks}
+    assert "financial_report.pdf" in sources
+    assert any("Total Revenue:" in c.text for c in rag._index.chunks)
+
+def test_permission_filter_keeps_original_vector_alignment():
+    class FakeEmbedding:
+        def encode(self, texts):
+            def vec(t):
+                low=t.casefold()
+                if "security" in low or "breach" in low:
+                    return [0,1,0]
+                if "benefits" in low: return [0,0,1]
+                return [1,0,0]
+            return [vec(t) for t in texts]
+    docs=[
+        Chunk("finance",1,1,"revenue finance",("analyst",)),
+        Chunk("security",1,1,"security breach",("auditor",)),
+        Chunk("benefits",1,1,"benefits pension",("auditor",)),
+    ]
+    idx=DocumentIndex(docs,embedder=FakeEmbedding())
+    got=idx.search("security breach","auditor",{"security","benefits"},k=2)
+    assert got[0]["source"]=="security"
+    assert all(r["source"]!="finance" for r in got)
+
+def test_documents_have_stable_evidence_ids(environment):
+    index=EnterpriseRAG(environment)._index
+    for item in index.chunks:
+        assert item.id.startswith(item.source+":p")
+    docs=EnterpriseRAG(environment).search_documents("health insurance","manager")
+    assert docs and docs[0]["source"]=="employee_handbook.pdf"
+
+def test_upload_requires_manager(client):
+    response=client.post("/v1/documents/upload",headers=auth("analyst"),
+        files={"file":("notes.txt",b"Budget report example","text/plain")})
+    assert response.status_code==403
+
+def test_upload_path_cannot_escape_root(client,environment):
+    response=client.post("/v1/documents/upload",headers=auth("manager"),
+        files={"file":("../../../../tmp/attack.txt",b"UniquePolicyToken for approved managers","text/plain")})
+    assert response.status_code==201
+    body=response.json()
+    assert body["source_id"].startswith("uploads/")
+    assert ".." not in body["source_id"]
+    assert (environment/body["source_id"]).exists()
+    assert not (environment/"attack.txt").exists()
+    q=client.post("/v1/query",headers=auth("manager"),
+        json={"query":"UniquePolicyToken"}).json()
+    assert any(row["source"]==body["source_id"] for row in q["evidence"])
+    other=client.post("/v1/query",headers=auth("analyst"),
+        json={"query":"UniquePolicyToken"}).json()
+    assert all(row["source"]!=body["source_id"] for row in other["evidence"])
+
+@pytest.mark.parametrize("filename,data",[
+    ("bad.pdf",b"not a PDF"),
+    ("bad.txt",b"\xff\xfe"),
+    ("large.txt",b"x"*2_000_001),
+])
+def test_upload_rejects_invalid_documents(client,filename,data):
+    response=client.post("/v1/documents/upload",headers=auth("manager"),
+        files={"file":(filename,data,"application/octet-stream")})
+    assert response.status_code==400
+
+def test_absent_token_config_fails_closed(monkeypatch):
+    monkeypatch.delenv("RAG_API_TOKENS_JSON",raising=False)
+    with pytest.raises(RuntimeError):
+        TokenAuthenticator()
+
+def test_invalid_token_policy_fails_closed():
+    with pytest.raises(RuntimeError):
+        TokenAuthenticator('{"short":{"subject":"alice","role":"manager"}}')
+
+def test_rrf_does_not_combine_incompatible_score_scales():
+    scores=reciprocal_rank_fusion([[2,1],[1,2]])
+    assert scores[1]==scores[2]
+
+def test_no_source_leak_in_document_results(environment):
+    rag=EnterpriseRAG(environment)
+    for role in ["analyst","auditor","manager"]:
+        rows=rag.search_documents("policy revenue handbook",role)
+        for row in rows:
+            assert row["source"] in rag.allowed(role)
+
+def test_refused_request_does_not_claim_high_confidence(client):
+    response=client.post("/v1/query",headers=auth("analyst"),
+        json={"query":"employee names"})
+    assert response.status_code==403
+
+def test_long_query_validation(client):
+    response=client.post("/v1/query",headers=auth("manager"),
+        json={"query":"x"*2001})
+    assert response.status_code==422
+
+
+def test_unknown_geography_does_not_expand_to_global_total(client):
+    response=client.post("/v1/query",headers=auth("analyst"),
+        json={"query":"Total revenue for South America"}).json()
+    assert response["status"]=="abstained"
+    assert "$225,000" not in response["answer"]
+
+def test_unsupported_time_and_aggregation_abstain(client):
+    for query in ("Q2 2024 revenue EMEA","Average sales for APAC","Compare quarterly EMEA sales"):
+        response=client.post("/v1/query",headers=auth("analyst"),json={"query":query}).json()
+        assert response["status"]=="abstained", query
+
+def test_handbook_request_routes_to_document_not_employee_sql(client):
+    response=client.post("/v1/query",headers=auth("manager"),
+        json={"query":"What does the employee handbook say about benefits?"}).json()
+    assert response["status"]=="evidence_only"
+    assert any(c["source"]=="employee_handbook.pdf" for c in response["citations"])
+
+def test_authentication_does_not_initialise_heavy_retriever_before_token_validation(
+        client, monkeypatch):
+    from app import api
+    api.backend.cache_clear()
+    monkeypatch.setenv("RAG_DATA_DIR","/this/data/directory/does/not/exist")
+    unauth=client.post("/v1/query",json={"query":"health insurance"})
+    assert unauth.status_code==401
+
+
+def test_unauthorised_documents_do_not_affect_bm25_corpus_statistics():
+    allowed=[
+        Chunk("public_a",1,1,"benefits leave pension",("analyst",)),
+        Chunk("public_b",1,1,"leave holidays vacation",("analyst",)),
+    ]
+    secret=Chunk("secret",1,1,"leave secret restricted leave leave leave",("manager",))
+    before=DocumentIndex(allowed).search("leave benefits","analyst",{"public_a","public_b"})
+    after=DocumentIndex([allowed[0],secret,allowed[1]]).search(
+        "leave benefits","analyst",{"public_a","public_b"})
+    assert [(r["source"],r["rank_score"]) for r in before] == [
+        (r["source"],r["rank_score"]) for r in after]
+
+def test_oversized_utf8_document_rejected():
+    from rag_service import extract_pages, InvalidDocument, MAX_EXTRACTED_CHARS
+    with pytest.raises(InvalidDocument):
+        extract_pages(("x"*(MAX_EXTRACTED_CHARS+1)).encode(),".txt")
+
+
+def test_known_and_unknown_regions_cannot_be_silently_combined(client):
+    response=client.post("/v1/query",headers=auth("analyst"),
+        json={"query":"Total revenue for South America and EMEA"}).json()
+    assert response["status"]=="abstained"
+    assert "$75,000" not in response["answer"]
+
+
+def test_uploaded_pdf_is_parsed_indexed_and_persistent(client,environment):
+    from io import BytesIO
+    from reportlab.pdfgen import canvas
+    stream=BytesIO()
+    page=canvas.Canvas(stream)
+    page.drawString(40,740,"ZebraProtocol requires quarterly audit attestation.")
+    page.save()
+    response=client.post("/v1/documents/upload",headers=auth("manager"),
+        files={"file":("external.pdf",stream.getvalue(),"application/pdf")})
+    assert response.status_code==201
+    source=response.json()["source_id"]
+    from rag_service import EnterpriseRAG
+    again=EnterpriseRAG(environment)
+    manager=again.search_documents("ZebraProtocol","manager")
+    assert any(row["source"]==source and row["page"]==1 for row in manager)
+    analyst=again.search_documents("ZebraProtocol","analyst")
+    assert all(row["source"]!=source for row in analyst)
+
+def test_corrupted_magic_pdf_is_rejected(client):
+    result=client.post("/v1/documents/upload",headers=auth("manager"),
+        files={"file":("broken.pdf",b"%PDF-1.7\nnot actually a PDF","application/pdf")})
+    assert result.status_code==400
+
+
+def test_failed_index_rebuild_rolls_back_atomic_upload(environment,monkeypatch):
+    rag=EnterpriseRAG(environment)
+    def broken_refresh(_chunks):
+        raise RuntimeError("simulated reindex failure")
+    monkeypatch.setattr(rag,"_build_index",broken_refresh)
+    with pytest.raises(RuntimeError,match="simulated"):
+        rag.upload(b"unpublished content for staging failure",".txt","manager")
+    uploaded=environment/"uploads"
+    staged=environment/".upload-staging"
+    assert not list(uploaded.iterdir())
+    assert not list(staged.iterdir())
+
+
+def test_internal_failure_detail_is_never_returned_to_client(client,monkeypatch):
+    from app import api
+    from rag_service import InsufficientEvidence, InvalidDocument
+
+    class BrokenService:
+        def query(self,question,identity):
+            raise InsufficientEvidence("SECRET_INTERNAL_PATH=/srv/private")
+        def upload(self,payload,extension,role):
+            raise InvalidDocument("SECRET_PARSER_DETAILS=/srv/private")
+
+    monkeypatch.setattr(api,"backend",lambda:BrokenService())
+    query=client.post("/v1/query",headers=auth("analyst"),
+        json={"query":"unsupported regional amount"})
+    assert query.status_code==200
+    assert query.json()["status"]=="abstained"
+    assert "SECRET" not in query.text
+
+    upload=client.post("/v1/documents/upload",headers=auth("manager"),
+        files={"file":("test.txt",b"valid document content","text/plain")})
+    assert upload.status_code==400
+    assert "SECRET" not in upload.text

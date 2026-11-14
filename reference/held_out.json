@@ -1,0 +1,25 @@
+{
+  "scope": "Authored fictional benchmark. Not independently labelled and not representative of a customer deployment.",
+  "cases": [
+    ["analyst", "literal", "What expense reimbursement requires manager approval?", "travel-expenses"],
+    ["manager", "literal", "Which expense receipts are required?", "travel-expenses"],
+    ["analyst", "paraphrase", "What authorisation do reimbursements need?", "travel-expenses"],
+    ["manager", "paraphrase", "What signoff applies to repayment?", "travel-expenses"],
+    ["analyst", "paraphrase", "How much PTO do staff receive?", "annual-leave"],
+    ["analyst", "literal", "When are office supply orders consolidated?", "office-supplies"],
+    ["manager", "literal", "What is the notice for a warehouse incident?", "incident-notice"],
+    ["auditor", "literal", "What is the contract closure retention rule?", "records-retention"],
+    ["auditor", "paraphrase", "How long is preservation required for procurement records?", "records-retention"],
+    ["auditor", "literal", "What triggers privileged credential renewal?", "credential-policy"],
+    ["manager", "literal", "When are passwords reset after exposure?", "credential-policy"],
+    ["auditor", "literal", "What labels mark outbound parcels?", "shipping-labels"],
+    ["analyst", "literal", "Who assigns a mailbox to each floor?", "operations"],
+    ["analyst", "denied", "Privileged credentials after suspected exposure", null],
+    ["analyst", "denied", "Procurement archiving after contract closure", null],
+    ["auditor", "denied", "Expense reimbursement receipts approval", null],
+    ["auditor", "denied", "Vacation leave allowance PTO", null],
+    ["analyst", "unanswerable", "What is the cafeteria lunch menu?", null],
+    ["manager", "unanswerable", "What is the fleet fuel surcharge?", null],
+    ["auditor", "unanswerable", "What mileage rate applies to bicycles?", null]
+  ]
+}

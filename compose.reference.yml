@@ -1,0 +1,52 @@
+# Overlay for local use only. Do not publish ports beyond loopback.
+services:
+  api:
+    environment:
+      RAG_PROFILE: reference
+      RAG_REFERENCE_RANKING: ${RAG_REFERENCE_RANKING:-lexical}
+      RAG_REFERENCE_ANSWER: ${RAG_REFERENCE_ANSWER:-off}
+      RAG_OIDC_ISSUER: https://localhost:8443/realms/juniper
+      RAG_OIDC_AUDIENCE: juniper-rag
+      RAG_OIDC_JWKS_URL: https://idp:8443/realms/juniper/protocol/openid-connect/certs
+      SSL_CERT_FILE: /lab/tls/cert.pem
+    volumes:
+      - ${RAG_LAB_PATH:?prepare the local lab}/cert.pem:/lab/tls/cert.pem:ro
+      - ${RAG_LAB_PATH}/source:/lab/source:ro
+    networks: [lab, model-backend]
+    depends_on:
+      idp: {condition: service_started}
+  idp:
+    image: quay.io/keycloak/keycloak:26.7.5@sha256:37dbaf6f0722c9ec246335f36e1ef8b2e6cb960f7c27e0d8c615121a3d475a85
+    command: ["start-dev", "--import-realm", "--http-enabled=false", "--https-certificate-file=/lab/cert.pem", "--https-certificate-key-file=/lab/key.pem", "--hostname=https://localhost:8443"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: lab-operator
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${RAG_LAB_ADMIN_PASSWORD:?prepare the local lab}
+    ports: ["127.0.0.1:8443:8443"]
+    volumes:
+      - ${RAG_LAB_PATH}/cert.pem:/lab/cert.pem:ro
+      - ${RAG_LAB_PATH}/key.pem:/lab/key.pem:ro
+      - ${RAG_LAB_PATH}/keycloak/juniper-realm.json:/opt/keycloak/data/import/juniper-realm.json:ro
+      - idp-data:/opt/keycloak/data
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [lab]
+  model:
+    profiles: [local-model]
+    image: ghcr.io/ggml-org/llama.cpp:server@sha256:c7d58273d753d33a352e5c41ab300c5ae040a16fa4b202231bb606478065c124
+    command: ["-m", "/models/reference.gguf", "--alias", "reference", "--host", "0.0.0.0", "--port", "8080", "-c", "4096", "-t", "2", "--parallel", "1", "--no-webui"]
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [model-backend]
+    volumes:
+      - ${RAG_LAB_PATH}/models:/models:ro
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 64
+networks:
+  lab: {}
+  model-backend:
+    internal: true
+volumes:
+  idp-data:

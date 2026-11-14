@@ -1,0 +1,75 @@
+name: Production profile
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, "hardening/**"]
+permissions:
+  contents: read
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - run: docker build --platform linux/amd64 --tag rag-candidate:${GITHUB_SHA} .
+      - name: Verify SQLite runtime and absence of affected CLI
+        run: >-
+          docker run --rm --network none --entrypoint python rag-candidate:${GITHUB_SHA}
+          -c 'import shutil, sqlite3; assert sqlite3.sqlite_version_info >= (3,54,1); assert shutil.which("sqlite3") is None'
+      - name: Exercise deployment, policy and restore
+        run: python3 scripts/deployment_smoke.py rag-candidate:${GITHUB_SHA}
+      - id: scan
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+        with:
+          image: rag-candidate:${{ github.sha }}
+          severity-cutoff: high
+          fail-build: false
+          output-format: json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rag-image-scan-${{ github.sha }}
+          path: ${{ steps.scan.outputs.json }}
+          if-no-files-found: error
+      - name: Enforce high and critical vulnerability gate
+        env:
+          RAG_SCAN_REPORT: ${{ steps.scan.outputs.json }}
+        run: python3 scripts/check_image_scan.py "$RAG_SCAN_REPORT"
+      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: rag-candidate:${{ github.sha }}
+          format: spdx-json
+          output-file: rag.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - run: |
+          docker image inspect --format '{{.Id}}' rag-candidate:${GITHUB_SHA} > rag-image.id
+          docker save rag-candidate:${GITHUB_SHA} | gzip > rag-image.tar.gz
+          sha256sum rag-image.tar.gz rag-image.id rag.spdx.json > SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rag-candidate-${{ github.sha }}
+          path: |
+            rag-image.tar.gz
+            rag-image.id
+            rag.spdx.json
+            SHA256SUMS
+          if-no-files-found: error
+  attest:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: rag-candidate-${{ github.sha }}
+      - run: sha256sum --check SHA256SUMS
+      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: rag-image.tar.gz, rag-image.id, rag.spdx.json
