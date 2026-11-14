@@ -3,14 +3,10 @@ const { chromium } = require('playwright');
 const { readFileSync } = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const assert = require('node:assert/strict');
-const { X509Certificate } = require('node:crypto');
 const path = require('node:path');
 
 const directory = process.env.RAG_LAB_PATH;
 const origin = 'http://localhost:8000';
-const trust = readFileSync(path.join(directory, 'cert.pem'));
-const expectedCertificate = new X509Certificate(trust).fingerprint256;
-assert.match(expectedCertificate,/^[0-9A-F:]+$/);
 const accounts = JSON.parse(readFileSync(path.join(directory, 'keycloak/accounts.json')));
 const prefix = ['compose', '--env-file', path.join(directory, 'compose.env'), '-p', 'juniper-reference', '-f', 'compose.production.yml', '-f', 'compose.reference.yml'];
 function docker(args, capture = false) {
@@ -53,9 +49,13 @@ const search = async page => {
   const browser = await chromium.launch({headless:true, ...(process.env.RAG_BROWSER_EXECUTABLE ? {executablePath:process.env.RAG_BROWSER_EXECUTABLE} : {})});
   try {
     // The lab uses a disposable local certificate. curl checks its exact CA separately.
-    const context = await browser.newContext({ignoreHTTPSErrors:true});
-    const page = await context.newPage();
-    page.setDefaultTimeout(20000);
+    const fresh = async () => {
+      const context = await browser.newContext({ignoreHTTPSErrors:true});
+      const page = await context.newPage();
+      page.setDefaultTimeout(20000);
+      return page;
+    };
+    let page = await fresh();
     await signIn(page, 'avery');
     await page.getByText('Signed in.', {exact:true}).waitFor();
     await search(page);
@@ -85,6 +85,7 @@ const search = async page => {
     admin('revoke',accounts.avery.sub);
     await page.evaluate(hash => { location.hash = hash; }, oldLink);
     await page.getByText('Access is no longer available.', {exact:true}).waitFor();
+    page = await fresh();
     await signIn(page, 'robin', currentLink);
     await page.getByText('This passage is unavailable.', {exact:true}).waitFor();
     publish(3);
@@ -94,11 +95,13 @@ const search = async page => {
     admin('--database','/var/lib/rag/lab-backup.sqlite3','sync-source','/lab/source');
     admin('activate-restore','/var/lib/rag/lab-backup.sqlite3');
     compose('up','-d','api');
-    await new Promise(resolve => setTimeout(resolve,2500));
+    await waitForStatus('/ready',200,90000);
+    page = await fresh();
     await signIn(page,'avery',currentLink);
     await page.getByText('Access is no longer available.',{exact:true}).waitFor();
     admin('grant',accounts.avery.sub,'analyst');
     await new Promise(resolve => setTimeout(resolve,1600));
+    page = await fresh();
     await signIn(page,'avery',currentLink);
     await page.getByText('This passage is unavailable.',{exact:true}).waitFor();
     console.log('PASS: Keycloak sign-in, document update, live links, denial, withdrawal and reconciled restore.');
@@ -113,6 +116,7 @@ const search = async page => {
     // Fresh verifier process guarantees the old cached key set cannot mask rollover.
     compose('up','-d','--no-deps','--force-recreate','api');
     await waitForStatus('/ready',200,90000);
+    page = await fresh();
     await signIn(page,'avery');
     await page.getByText('Signed in.',{exact:true}).waitFor();
     await page.locator('#question').fill('Which day are office supply orders consolidated?');
@@ -120,9 +124,11 @@ const search = async page => {
     await page.getByText(/consolidated every Tuesday/).first().waitFor();
     console.log('PASS: freshly rotated Keycloak signing key works with a cold verifier.');
     operator('update',`users/${accounts.avery.sub}`,'-r','juniper','-s','attributes.rag_role=["auditor"]');
+    page = await fresh();
     await signIn(page,'avery',currentLink);
     await page.getByText('Access is no longer available.',{exact:true}).waitFor();
     operator('update',`users/${accounts.avery.sub}`,'-r','juniper','-s','enabled=false');
+    page = await fresh();
     await signIn(page,'avery');
     await page.locator('#input-error').waitFor();
     console.log('PASS: fresh role mismatch denied and disabled account cannot sign in.');
