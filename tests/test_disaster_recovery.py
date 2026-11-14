@@ -132,3 +132,42 @@ def test_migration_moves_legacy_grant_cutoff_once(tmp_path):
     store.migrate()
     assert not store.entitled(Identity("avery", "analyst", 100 + GRANT_CUTOFF_SECONDS - 1))
     assert store.entitled(Identity("avery", "analyst", 100 + GRANT_CUTOFF_SECONDS))
+
+
+def test_readable_restore_preserves_withdrawn_high_water_versions(tmp_path):
+    from production_admin import activate_restore
+
+    live = ProductionStore(tmp_path / "live.sqlite3")
+    live.initialize()
+    source = tmp_path / "source"
+    write(source, 1)
+    sync(live, source)
+    snapshot = tmp_path / "backup.sqlite3"
+    live.backup(snapshot)
+    stage = ProductionStore(snapshot)
+    stage.clear_principals_for_restore()
+    write(source, 2)
+    sync(live, source)
+    retired = json.loads((source / "manifest.json").read_bytes())["documents"][0]
+    write(source, 3)
+    sync(live, source)
+    # A later release must not use an old snapshot's weaker per-document history.
+    manifest = json.loads((source / "manifest.json").read_bytes())
+    manifest["documents"].append(retired)
+    (source / "manifest.json").unlink()
+    (source / "manifest.json").write_text(json.dumps(manifest))
+    sync(stage, source)
+    with pytest.raises(RuntimeError, match="revive a superseded or withdrawn source"):
+        activate_restore(live, snapshot)
+    manifest["documents"].pop()
+    manifest["release"] = 4
+    (source / "manifest.json").write_text(json.dumps(manifest))
+    sync(stage, source)
+    activate_restore(live, snapshot)
+    with live.connect() as db:
+        assert db.execute("SELECT version FROM source_history WHERE source_key='travel-expenses'").fetchone() == (2,)
+    manifest["documents"].append(retired)
+    manifest["release"] = 5
+    (source / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="higher version"):
+        sync(live, source)

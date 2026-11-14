@@ -22,6 +22,9 @@ def activate_restore(active: ProductionStore, staged_path: Path) -> None:
     with deployment_lock(active.path):
         with active.connect() as live:
             live_release = live.execute("SELECT release FROM source_release WHERE slot=1").fetchone()
+            live_history = dict(live.execute("SELECT source_key,version FROM source_history"))
+            live_managed = {key: (version, digest, title, effective) for key, version, digest, title, effective in
+                            live.execute("SELECT source_key,version,digest,title,effective_at FROM documents WHERE source_key IS NOT NULL")}
         with staged.connect(write=True) as db:
             staged_release = db.execute("SELECT release FROM source_release WHERE slot=1").fetchone()
             if live_release and (not staged_release or staged_release[0] < live_release[0]):
@@ -29,6 +32,14 @@ def activate_restore(active: ProductionStore, staged_path: Path) -> None:
             if db.execute("PRAGMA integrity_check").fetchone() != ("ok",):
                 raise RuntimeError("invalid staged snapshot")
             require_quarantine(db)
+            for key, version, digest, title, effective in db.execute(
+                "SELECT source_key,version,digest,title,effective_at FROM documents WHERE source_key IS NOT NULL"
+            ):
+                high = live_history.get(key, 0)
+                if version < high or (version == high and live_managed.get(key) != (version, digest, title, effective)):
+                    raise RuntimeError("staged catalog would revive a superseded or withdrawn source version")
+            db.executemany("INSERT INTO source_history VALUES (?,?) ON CONFLICT(source_key) "
+                           "DO UPDATE SET version=MAX(version,excluded.version)", live_history.items())
         # SQLite may leave sidecars after the last read-only connection closes.
         # Have SQLite checkpoint and remove them itself, never unlink a WAL manually.
         for path in (active.path, staged.path):
