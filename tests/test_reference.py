@@ -129,4 +129,23 @@ def test_reference_comparison_has_no_observed_permission_leaks():
     report = run(concurrency=2, requests=8)
     assert set(report["modes"]) == {"lexical", "concept", "semantic"}
     assert all(row["all"]["leaks"] == 0 for row in report["modes"].values())
+    assert report["modes"]["lexical"]["all"]["abstained"] == report["modes"]["lexical"]["all"]["unanswerable"]
     assert report["modes"]["concept"]["all"]["hits"] >= report["modes"]["lexical"]["all"]["hits"]
+
+
+def test_restore_refuses_a_stale_source_release(lab, tmp_path):
+    from production_admin import activate_restore
+
+    db, source, avery, _ = lab
+    snapshot = tmp_path / "stale.sqlite3"
+    db.backup(snapshot)
+    write(source, 3)
+    sync(db, source)
+    staged = ProductionStore(snapshot)
+    staged.clear_principals_for_restore()
+    with pytest.raises(RuntimeError, match="current source release"):
+        activate_restore(db, snapshot)
+    sync(staged, source)
+    activate_restore(db, snapshot)
+    with pytest.raises(PermissionError):
+        db.query("reimbursement approval", avery)

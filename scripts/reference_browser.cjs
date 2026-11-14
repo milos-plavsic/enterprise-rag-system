@@ -25,7 +25,7 @@ const signIn = async (page, user, hash = '') => {
   await page.locator('#kc-login').click();
 };
 const search = async page => {
-  await page.locator('#question').fill('Which expenses need manager approval?');
+  await page.locator('#question').fill('Which expense needs manager approval?');
   await page.getByRole('button', {name:'Search',exact:true}).click();
 };
 

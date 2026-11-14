@@ -19,7 +19,12 @@ def activate_restore(active: ProductionStore, staged_path: Path) -> None:
     if staged.path == active.path or staged.path.parent != active.path.parent:
         raise ValueError("restore requires a different staged file on the same volume")
     with deployment_lock(active.path):
+        with active.connect() as live:
+            live_release = live.execute("SELECT release FROM source_release WHERE slot=1").fetchone()
         with staged.connect(write=True) as db:
+            staged_release = db.execute("SELECT release FROM source_release WHERE slot=1").fetchone()
+            if live_release and (not staged_release or staged_release[0] < live_release[0]):
+                raise RuntimeError("reconcile the staged snapshot with the current source release before activation")
             if db.execute("PRAGMA integrity_check").fetchone() != ("ok",):
                 raise RuntimeError("invalid staged snapshot")
             if (db.execute("SELECT 1 FROM principals LIMIT 1").fetchone() or
