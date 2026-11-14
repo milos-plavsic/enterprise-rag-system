@@ -12,6 +12,7 @@ import json
 from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError
 import jwt
 from jwt import PyJWKClient
+from identity_policy import PRODUCTION_JWT_LEEWAY_SECONDS
 from rag_service import Identity
 
 class NoRedirect(HTTPRedirectHandler):
@@ -90,7 +91,7 @@ class OIDCAuthenticator:
                 token, signing_key,
                 algorithms=["RS256"],
                 audience=self.audience, issuer=self.issuer,
-                leeway=5 if self.production else 30,
+                leeway=PRODUCTION_JWT_LEEWAY_SECONDS if self.production else 30,
                 options={"require": ["exp", "iat", "iss", "aud", "sub"]},
             )
         except PyJWKClientConnectionError:

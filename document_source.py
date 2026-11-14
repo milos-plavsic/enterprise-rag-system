@@ -37,10 +37,13 @@ def _clock() -> int:
     return int(datetime.now(timezone.utc).timestamp())
 
 
-def sync(store: ProductionStore, root: Path, *, parser_socket: str | None = None) -> dict:
+def sync(store: ProductionStore, root: Path, *, parser_socket: str | None = None,
+         recovery_manifest_sha256: str | None = None) -> dict:
     """Publish one complete snapshot. Omissions withdraw managed documents only."""
     root = root.resolve(strict=True)
     raw = _bytes(root / "manifest.json", MANIFEST_LIMIT)
+    if recovery_manifest_sha256 is not None and hashlib.sha256(raw).hexdigest() != recovery_manifest_sha256:
+        raise ValueError("authoritative source manifest digest mismatch")
     manifest = json.loads(raw)
     if not isinstance(manifest, dict) or set(manifest) != {"release", "documents"}:
         raise ValueError("invalid source manifest")
@@ -49,7 +52,7 @@ def sync(store: ProductionStore, root: Path, *, parser_socket: str | None = None
         raise ValueError("invalid release or document count")
     with store.connect() as db:
         previous = db.execute("SELECT release FROM source_release").fetchone()
-        if previous and release <= previous[0]:
+        if previous and (release < previous[0] or release == previous[0] and recovery_manifest_sha256 is None):
             raise ValueError("source release must increase")
     prepared = {}
     total_chunks = 0
@@ -84,13 +87,14 @@ def sync(store: ProductionStore, root: Path, *, parser_socket: str | None = None
         prepared[key] = (version, title, tuple(sorted(roles)), effective_at, digest, len(pages), rows)
     if _bytes(root / "manifest.json", MANIFEST_LIMIT) != raw:
         raise ValueError("manifest changed during import")
-    return _apply(store, release, prepared, total_chunks)
+    return _apply(store, release, prepared, total_chunks, reconcile=recovery_manifest_sha256 is not None)
 
 
-def _apply(store: ProductionStore, release: int, prepared: dict, total_chunks: int) -> dict:
+def _apply(store: ProductionStore, release: int, prepared: dict, total_chunks: int,
+           *, reconcile: bool) -> dict:
     with store.connect(write=True) as db:
         previous = db.execute("SELECT release FROM source_release").fetchone()
-        if previous and release <= previous[0]:
+        if previous and (release < previous[0] or release == previous[0] and not reconcile):
             raise ValueError("source release must increase")
         if (db.execute("SELECT COUNT(*) FROM documents WHERE source_key IS NULL").fetchone()[0] + len(prepared) > MAX_DOCUMENTS
                 or db.execute("SELECT COUNT(*) FROM chunks JOIN documents ON id=document_id WHERE source_key IS NULL").fetchone()[0]
@@ -105,6 +109,10 @@ def _apply(store: ProductionStore, release: int, prepared: dict, total_chunks: i
                 source = existing[0]
                 current_roles = tuple(row[0] for row in db.execute(
                     "SELECT role FROM document_roles WHERE document_id=? ORDER BY role", (source,)))
+                if reconcile:
+                    db.execute("DELETE FROM chunks WHERE document_id=?", (source,))
+                    db.executemany("INSERT INTO chunks VALUES (?,?,?,?)", [(source, *row) for row in rows])
+                    db.execute("UPDATE documents SET page_count=? WHERE id=?", (page_count, source))
                 if current_roles != roles:
                     db.execute("DELETE FROM document_roles WHERE document_id=?", (source,))
                     _roles(db, source, roles)

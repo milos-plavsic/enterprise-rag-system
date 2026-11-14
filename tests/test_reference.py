@@ -8,6 +8,7 @@ import time
 import pytest
 
 from document_source import sync
+from identity_policy import GRANT_CUTOFF_SECONDS
 from production_store import ProductionStore, SOURCES
 from rag_service import Identity
 from reference.corpus import write
@@ -24,7 +25,7 @@ def lab(tmp_path):
     assert sync(db, source)["documents"] == 8
     db.set_principal("avery", "analyst")
     db.set_principal("robin", "auditor")
-    iat = int(time.time()) + 2
+    iat = int(time.time()) + GRANT_CUTOFF_SECONDS
     return db, source, Identity("avery", "analyst", iat), Identity("robin", "auditor", iat)
 
 
@@ -110,7 +111,7 @@ def test_migrates_previous_schema_preserving_existing_grants_and_documents(tmp_p
     store.migrate()
     store.migrate()
     store.readiness()
-    assert store.query("Juniper", Identity("avery", "analyst", 2))["evidence"][0]["title"] == "Old title"
+    assert store.query("Juniper", Identity("avery", "analyst", 1 + GRANT_CUTOFF_SECONDS))["evidence"][0]["title"] == "Old title"
 
 
 def test_local_selector_only_emits_literal_authorised_quotes(lab):

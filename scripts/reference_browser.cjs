@@ -100,7 +100,7 @@ const search = async page => {
     await signIn(page,'avery',currentLink);
     await page.getByText('Access is no longer available.',{exact:true}).waitFor();
     admin('grant',accounts.avery.sub,'analyst');
-    await new Promise(resolve => setTimeout(resolve,1600));
+    await new Promise(resolve => setTimeout(resolve,6500));
     page = await fresh();
     await signIn(page,'avery',currentLink);
     await page.getByText('This passage is unavailable.',{exact:true}).waitFor();

@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from reportlab.pdfgen.canvas import Canvas
 
 from app import api
+from identity_policy import GRANT_CUTOFF_SECONDS, PRODUCTION_JWT_LEEWAY_SECONDS
 from auth_oidc import OIDCAuthenticator
 from pdf_transport import parser_ready
 from production_runtime import deployment_lock
@@ -66,8 +67,11 @@ def production(tmp_path, monkeypatch):
     path = tmp_path / "production.sqlite3"
     db = ProductionStore(path)
     db.initialize()
+    granted_at = int(time.time()) - GRANT_CUTOFF_SECONDS
     for subject, role in [("alice", "manager"), ("bob", "manager"), ("cora", "analyst")]:
-        db.set_principal(subject, role)
+        with monkeypatch.context() as patch:
+            patch.setattr("production_store.time.time", lambda: granted_at)
+            db.set_principal(subject, role)
     keyfile = tmp_path / "audit-key"
     keyfile.write_bytes(os.urandom(32).hex().encode())
     private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -84,7 +88,7 @@ def production(tmp_path, monkeypatch):
     api.rate_gate.recent.clear()
 
     def headers(subject="alice", role="manager", *, token_type="at+jwt", duration=180, issued_at=None):
-        iat = int(time.time()) + 2 if issued_at is None else issued_at
+        iat = int(time.time()) if issued_at is None else issued_at
         signed = jwt.encode({"iss": ISSUER, "aud": AUDIENCE, "sub": subject,
                              "enterprise_role": role, "iat": iat, "exp": iat + duration},
                             private, algorithm="RS256", headers={"typ": token_type, "kid": "local"})
@@ -121,16 +125,24 @@ def test_production_owner_acl_and_delete(production):
 
 def test_revocation_survives_regrant_and_is_checked_on_next_request(production, monkeypatch):
     client, db, headers, _ = production
-    iat = int(time.time()) + 2
-    old = headers(issued_at=iat)
+    now = int(time.time())
+    old = headers(issued_at=now + PRODUCTION_JWT_LEEWAY_SECONDS)
     assert ask(client, old, "Quartz").status_code == 200
-    db.set_principal("alice", None)
-    assert ask(client, old, "Quartz").status_code == 403
     with monkeypatch.context() as patch:
-        patch.setattr("production_store.time.time", lambda: iat)
+        patch.setattr("production_store.time.time", lambda: now)
+        db.set_principal("alice", None)
+        assert ask(client, old, "Quartz").status_code == 403
         db.set_principal("alice", "manager")
     assert ask(client, old, "Quartz").status_code == 403
-    assert ask(client, headers(issued_at=iat + 1), "Quartz").status_code == 200
+    from datetime import datetime, timezone
+
+    class Later(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.fromtimestamp(now + GRANT_CUTOFF_SECONDS, tz=tz or timezone.utc)
+
+    monkeypatch.setattr("jwt.api_jwt.datetime", Later)
+    assert ask(client, headers(issued_at=now + GRANT_CUTOFF_SECONDS), "Quartz").status_code == 200
 
 
 def test_snapshot_restores_content_and_permissions(production, tmp_path):

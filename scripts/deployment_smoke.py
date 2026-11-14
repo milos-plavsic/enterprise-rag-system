@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import concurrent.futures
+import hashlib
 import json
 import os
 import stat
@@ -80,6 +81,8 @@ def main(image: str) -> None:
             {"kty": "RSA", "use": "sig", "alg": "RS256", "kid": "smoke",
              "n": b64(bytes.fromhex(modulus.decode().strip().split("=", 1)[1])).decode(), "e": "AQAB"}]}))
         (fixture / "smoke_idp.py").write_bytes((ROOT / "scripts/smoke_idp.py").read_bytes())
+        recovery = json.dumps({"source_manifest_sha256": None, "source_history": {}, "unmanaged": []}).encode()
+        (fixture / "recovery.json").write_bytes(recovery)
         (fixture / "source.txt").write_text("Cedar reference manual for quarterly close.")
         audit = root / "audit-key"
         audit.write_text(os.urandom(32).hex())
@@ -92,6 +95,7 @@ def main(image: str) -> None:
     volumes:
       - {fixture / "cert.pem"}:/fixture/cert.pem:ro
       - {fixture / "source.txt"}:/fixture/source.txt:ro
+      - {fixture / "recovery.json"}:/fixture/recovery.json:ro
   idp:
     image: {image}
     command: ["python", "/fixture/smoke_idp.py"]
@@ -142,6 +146,7 @@ def main(image: str) -> None:
             admin("publish", "/fixture/source.txt", "--title", "Cedar", "--role", "analyst")
             docker("up", "-d")
             url = ready()
+            time.sleep(6)  # allow newly granted identities to cross the issuer-skew cutoff
             token_a, token_b = bearer("smoke-a", "manager"), bearer("smoke-b", "manager")
             boundary = "rag-smoke-test-boundary"
             body = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="reference.txt"'
@@ -179,9 +184,26 @@ def main(image: str) -> None:
             url = ready()
             assert ask(url, token_a, "Juniper")[0] == 403
             admin("grant", "smoke-a", "manager")
-            time.sleep(2)
+            time.sleep(6)
             assert ask(url, bearer("smoke-a", "manager"), "Juniper")[1]["citations"][0]["source"] == source
             print("Container replacement, revocation and quarantined restore passed")
+            admin("backup", "/var/lib/rag/disaster.sqlite3")
+            docker("stop", "api")
+            admin("--database", "/var/lib/rag/disaster.sqlite3", "quarantine-restored-grants")
+            # Only the disposable CI database is replaced by this corruption fixture.
+            docker("run", "--rm", "--no-deps", "api", "python", "-c",
+                   "from pathlib import Path; Path('/var/lib/rag/catalog.sqlite3').write_bytes(b'failed catalog')")
+            recovery_result = json.loads(admin("recover-catalog", "/var/lib/rag/disaster.sqlite3",
+                                               "--authority", "/fixture/recovery.json",
+                                               "--authority-sha256", hashlib.sha256(recovery).hexdigest()))
+            assert recovery_result["preserved_failed_catalog"].startswith("/var/lib/rag/.failed-catalog-")
+            docker("up", "-d", "--no-deps", "api")
+            url = ready()
+            assert ask(url, token_a, "Juniper")[0] == 403
+            admin("grant", "smoke-a", "manager")
+            time.sleep(6)
+            assert ask(url, bearer("smoke-a", "manager"), "Juniper")[1]["status"] == "abstained"
+            print("Corrupt catalog recovery, fresh grant and unreconciled content denial passed")
         except Exception:
             docker("logs", "--no-color", check=False)
             raise

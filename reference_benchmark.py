@@ -13,6 +13,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from document_source import sync
+from identity_policy import GRANT_CUTOFF_SECONDS
 from production_store import ProductionStore
 from rag_service import Identity
 from reference.corpus import write
@@ -29,7 +30,7 @@ def run(*, concurrency: int = 4, requests: int = 80) -> dict:
         source_stats = sync(db, root / "source")
         for role in ("analyst", "manager", "auditor"):
             db.set_principal(role, role)
-        issued_at = int(time.time()) + 2
+        issued_at = int(time.time()) + GRANT_CUTOFF_SECONDS
         with db.connect() as connection:
             keys = dict(connection.execute("SELECT id,source_key FROM documents"))
         manifest = json.loads((root / "source/manifest.json").read_text())

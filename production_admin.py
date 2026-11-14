@@ -8,6 +8,7 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
+from disaster_recovery import recover, require_quarantine
 from production_runtime import deployment_lock
 from production_store import ProductionStore, ROLES
 from rag_service import MAX_UPLOAD_BYTES, extract_pages
@@ -27,9 +28,7 @@ def activate_restore(active: ProductionStore, staged_path: Path) -> None:
                 raise RuntimeError("reconcile the staged snapshot with the current source release before activation")
             if db.execute("PRAGMA integrity_check").fetchone() != ("ok",):
                 raise RuntimeError("invalid staged snapshot")
-            if (db.execute("SELECT 1 FROM principals LIMIT 1").fetchone() or
-                    not db.execute("SELECT 1 FROM policy_history WHERE event='restore_quarantine' LIMIT 1").fetchone()):
-                raise RuntimeError("stage must be quarantined with no active grants")
+            require_quarantine(db)
         # SQLite may leave sidecars after the last read-only connection closes.
         # Have SQLite checkpoint and remove them itself, never unlink a WAL manually.
         for path in (active.path, staged.path):
@@ -70,6 +69,11 @@ def main() -> None:
     commands.add_parser("quarantine-restored-grants")
     restore = commands.add_parser("activate-restore")
     restore.add_argument("staged", type=Path)
+    disaster = commands.add_parser("recover-catalog")
+    disaster.add_argument("snapshot", type=Path)
+    disaster.add_argument("--authority", type=Path, required=True)
+    disaster.add_argument("--authority-sha256", required=True)
+    disaster.add_argument("--source", type=Path)
     remove = commands.add_parser("delete")
     remove.add_argument("source")
     backup = commands.add_parser("backup")
@@ -107,6 +111,10 @@ def main() -> None:
         db.clear_principals_for_restore()
     elif args.command == "activate-restore":
         activate_restore(db, args.staged)
+    elif args.command == "recover-catalog":
+        preserved = recover(db, args.snapshot, args.authority, args.authority_sha256,
+                            source=args.source, parser_socket=os.getenv("RAG_PARSER_SOCKET"))
+        print(json.dumps({"preserved_failed_catalog": str(preserved)}))
     elif args.command == "delete":
         if not db.delete(args.source):
             cli.error("document not found")

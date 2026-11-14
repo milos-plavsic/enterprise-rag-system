@@ -17,9 +17,10 @@ from rag_service import (
 )
 
 from pdf_worker import MAX_PAGES
+from identity_policy import GRANT_CUTOFF_SECONDS, PRODUCTION_JWT_LEEWAY_SECONDS
 
 ROLES = frozenset({"analyst", "manager", "auditor"})
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SOURCES = """
 CREATE TABLE principals (subject TEXT PRIMARY KEY, role TEXT NOT NULL
     CHECK(role IN ('analyst','manager','auditor')), min_iat INTEGER NOT NULL);
@@ -92,15 +93,18 @@ class ProductionStore:
             old = db.execute("PRAGMA user_version").fetchone()[0]
             if old == SCHEMA_VERSION:
                 return
-            if old != 1:
+            if old not in {1, 2}:
                 raise RuntimeError("unsupported production database migration")
-            db.execute("ALTER TABLE documents ADD COLUMN source_key TEXT")
-            db.execute("ALTER TABLE documents ADD COLUMN version INTEGER")
-            db.execute("ALTER TABLE documents ADD COLUMN effective_at INTEGER")
-            db.execute("CREATE UNIQUE INDEX documents_source_key ON documents(source_key)")
-            db.execute("CREATE TABLE source_release (slot INTEGER PRIMARY KEY CHECK(slot=1), release INTEGER NOT NULL)")
-            db.execute("CREATE TABLE source_history (source_key TEXT PRIMARY KEY, version INTEGER NOT NULL)")
-            db.execute("PRAGMA user_version=2")
+            if old == 1:
+                db.execute("ALTER TABLE documents ADD COLUMN source_key TEXT")
+                db.execute("ALTER TABLE documents ADD COLUMN version INTEGER")
+                db.execute("ALTER TABLE documents ADD COLUMN effective_at INTEGER")
+                db.execute("CREATE UNIQUE INDEX documents_source_key ON documents(source_key)")
+                db.execute("CREATE TABLE source_release (slot INTEGER PRIMARY KEY CHECK(slot=1), release INTEGER NOT NULL)")
+                db.execute("CREATE TABLE source_history (source_key TEXT PRIMARY KEY, version INTEGER NOT NULL)")
+            # Existing grants used the old +1 cutoff. Preserve the grants but close that window.
+            db.execute("UPDATE principals SET min_iat=min_iat+?", (PRODUCTION_JWT_LEEWAY_SECONDS,))
+            db.execute("PRAGMA user_version=3")
 
     def _sync_directory(self) -> None:
         fd = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY)
@@ -122,14 +126,18 @@ class ProductionStore:
         validate_subject(subject)
         if role is not None and role not in ROLES:
             raise ValueError("invalid role")
-        now = int(time.time())
         with self.connect(write=True) as db:
+            now = int(time.time())
+            previous = db.execute("SELECT MAX(changed) FROM policy_history WHERE subject=? AND event IN ('grant','revoke')",
+                                  (subject,)).fetchone()[0]
+            if previous is not None:
+                now = max(now, previous)
             if role is None:
                 db.execute("DELETE FROM principals WHERE subject=?", (subject,))
             else:
                 # A token minted before the change cannot regain access on re-enrolment.
                 db.execute("INSERT INTO principals VALUES (?,?,?) ON CONFLICT(subject) DO UPDATE "
-                           "SET role=excluded.role, min_iat=excluded.min_iat", (subject, role, now + 1))
+                           "SET role=excluded.role, min_iat=excluded.min_iat", (subject, role, now + GRANT_CUTOFF_SECONDS))
             db.execute("INSERT INTO policy_history(event,subject,role,changed) VALUES (?,?,?,?)",
                        ("revoke" if role is None else "grant", subject, role, now))
 

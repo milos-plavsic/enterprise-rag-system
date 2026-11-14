@@ -20,9 +20,13 @@ rag up -d
 curl --fail http://127.0.0.1:8000/ready
 ```
 
-The application requires both the signed IdP role and the locally granted role. Operators run `grant SUBJECT ROLE` or `revoke SUBJECT` using the same `run` pattern. A grant requires a freshly issued token with `iat` after the recorded change second. Local revoke applies to subsequent requests without waiting for token expiry. A request authorised just before revocation may complete. An enterprise owner must connect IdP deprovisioning to this procedure or accept the documented maximum remaining token lifetime after the IdP stops issuing tokens. Test the actual provider before enabling access.
+The application requires both the signed IdP role and the locally granted role. Operators run `grant SUBJECT ROLE` or `revoke SUBJECT` using the same `run` pattern. After a grant, wait at least six seconds on a synchronised clock before requesting a new access token. The accepted `iat` must exceed the recorded grant time by the five-second verifier skew allowance plus one second. A slower issuer clock can require a longer wait. Local revoke applies to subsequent requests without waiting for token expiry. A request authorised just before revocation may complete. An enterprise owner must connect IdP deprovisioning to this procedure or accept the documented maximum remaining token lifetime after the IdP stops issuing tokens. Test the actual provider before enabling access.
 
 Uploaded documents are manager-only and private to the authenticated uploader, not shared across managers. An operator can publish reviewed documents to named roles, change the roles with `document-roles ID --role ROLE`, clear them by omitting `--role`, or remove the document with `delete ID`. Managers can delete only their own uploads. SQLite transactions persist the text chunks, document source ID and content hash together. Raw files are not retained or served. This does not make old snapshots or WAL history instantly disappear. Define deletion handling for encrypted backups and retention tiers, and reconcile deleted documents before any restored copy is brought online. The DB's policy history includes identifiers and is sensitive.
+
+## Upgrade notes
+
+Catalog schema 3 retains existing grants but extends each legacy token cutoff by the configured five-second clock-skew allowance. With the old service stopped and an independently verified backup retained, run `production_admin.py migrate` using the new image before startup. Migration also supports schema 1 directly. Migrate a schema 1 or 2 snapshot offline before using it with the new image. An old binary requires a compatible pre-migration snapshot for rollback, with current access and deletions reconciled before serving.
 
 ## Recovery and monitoring
 
@@ -31,6 +35,25 @@ Uploaded documents are manager-only and private to the authenticated uploader, n
 - For restore, stop the API, retain an encrypted copy of the current state, and stage the snapshot under a new name on the volume. Run `production_admin.py --database STAGED_FILE quarantine-restored-grants` to clear stale entitlements. Reconcile deleted documents and ACL changes against current authoritative records. Stop other operators from making changes during restore. Use `production_admin.py activate-restore STAGED_FILE` to checkpoint the old database and activate the quarantined stage while holding the API lock. Regrant only active subjects from current authoritative records after activation. Start behind a closed ingress and verify readiness, positive access and known-denied cases before reopening ingress.
 - For application rollback, close ingress, verify that the prior attested image supports the active database schema, set its registry digest, recreate both containers, then repeat readiness and entitlement checks. If schema is incompatible, use the staged restore procedure. Do not restore old grants or ACLs simply to roll back code.
 - Uploads and queries have separate concurrency bounds. The API performs no untrusted PDF parsing. Each parser child has CPU, memory and wall-clock limits. A failed or over-budget extraction creates no document. Production indexing reads current permitted chunks and does not require a global upload-time rebuild or distributed cache. The reference profile is capped at 100 documents and 3,000 chunks. The CI smoke batch is a regression check, not a workload sizing result.
+
+### Disaster recovery when the active catalog is lost or corrupt
+
+`activate-restore` is for a readable catalog. If it is absent or damaged, keep ingress closed and stop the API and operator jobs. Work on the replacement volume with a verified backup. Do not use the backup as the authority for what is current. Obtain a current recovery record and its approved SHA-256 from a trusted records custodian or independently maintained control plane, outside the failed volume. If you do not have that evidence, rebuild from authoritative sources or keep the service closed.
+
+The recovery JSON must contain exactly three fields:
+
+- `source_manifest_sha256` is the SHA-256 of the current complete managed-source `manifest.json`, or `null` if no managed documents are approved. Supply `--source` for a non-null value. Managed files are verified against the manifest and reconciled, including ACLs, current versions and withdrawals. A null manifest removes all managed documents from the recovered corpus.
+- `source_history` maps every managed key, including withdrawals, to its highest authoritative version. Use `{}` if the manifest is null. Keep this record outside the failed volume alongside the approved release. It prevents resurrecting an old document version after losing the original catalog's history.
+- `unmanaged` is the complete current allowlist of individually published or owner-private documents you choose to recover. Each row contains `id`, `sha256` of the original file, `owner` (subject or `null`), and `roles` (empty for private documents). Omitted documents are removed. An approved document that is missing from the snapshot, or whose digest or owner differs, stops recovery. A partial recovery must be explicitly authorised by the inventory, not inferred by the tool.
+
+```sh
+python production_admin.py --database /var/lib/rag/staged.sqlite3 quarantine-restored-grants
+python production_admin.py recover-catalog /var/lib/rag/staged.sqlite3 \
+  --authority /approved/current-recovery.json --authority-sha256 "$APPROVED_SHA256" \
+  --source /approved/current-documents
+```
+
+The command refuses a healthy active catalog, verifies the recovery record against the independently supplied digest, reconciles a copy of the quarantined snapshot and installs it under the deployment lock. It does not infer that a valid hash is proof of freshness or who approved the record. It keeps the input snapshot and preserves the failed catalog and journal files in a private directory. Do not reopen ingress until readiness and positive/negative access checks pass with fresh grants. Keep or dispose of the preserved material using the organisation's retention policy.
 
 ## Release gates still requiring an enterprise environment
 
