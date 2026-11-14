@@ -123,6 +123,12 @@ const search = async page => {
     await page.getByRole('button',{name:'Search',exact:true}).click();
     await page.getByText(/consolidated every Tuesday/).first().waitFor();
     console.log('PASS: freshly rotated Keycloak signing key works with a cold verifier.');
+    const profilePath = 'users/profile';
+    const profile = JSON.parse(docker(['exec','-T','idp','/opt/keycloak/bin/kcadm.sh','get',profilePath,'-r','juniper'],true));
+    // Manage this claim explicitly. Never allow the end user to set their own role.
+    profile.attributes.push({name:'rag_role',displayName:'RAG role',multivalued:false,
+      permissions:{view:['admin'],edit:['admin']},validations:{options:{options:['analyst','manager','auditor']}}});
+    docker(['exec','-T','idp','/opt/keycloak/bin/kcadm.sh','update',profilePath,'-r','juniper','-n','-f','-'],false,JSON.stringify(profile));
     const userPath = `users/${accounts.avery.sub}`;
     const user = () => JSON.parse(docker(['exec','-T','idp','/opt/keycloak/bin/kcadm.sh','get',userPath,'-r','juniper'],true));
     const identity = user();
