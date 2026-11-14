@@ -18,6 +18,9 @@ services:
   idp:
     image: quay.io/keycloak/keycloak:26.7.5@sha256:37dbaf6f0722c9ec246335f36e1ef8b2e6cb960f7c27e0d8c615121a3d475a85
     command: ["start-dev", "--import-realm", "--http-enabled=false", "--https-certificate-file=/lab/cert.pem", "--https-certificate-key-file=/lab/key.pem", "--hostname=https://localhost:8443"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: lab-operator
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${RAG_LAB_ADMIN_PASSWORD:?prepare the local lab}
     ports: ["127.0.0.1:8443:8443"]
     volumes:
       - ${RAG_LAB_PATH}/cert.pem:/lab/cert.pem:ro

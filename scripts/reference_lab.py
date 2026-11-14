@@ -41,6 +41,7 @@ def prepare(path: Path) -> None:
     (path / "models").chmod(0o755)
     (path / "compose.env").write_text(f"RAG_LAB_PATH={path_text}\nRAG_DATA_PATH={path_text}/data\n"
                                       f"RAG_AUDIT_KEY_PATH={path_text}/audit-key\nRAG_IMAGE=juniper-rag:local\n"
+                                      f"RAG_LAB_ADMIN_PASSWORD={secrets.token_urlsafe(32)}\n"
                                       "RAG_OIDC_ISSUER=https://localhost:8443/realms/juniper\n"
                                       "RAG_OIDC_AUDIENCE=juniper-rag\nRAG_OIDC_JWKS_URL=https://idp:8443/realms/juniper/protocol/openid-connect/certs\n",
                                       encoding="utf-8")
