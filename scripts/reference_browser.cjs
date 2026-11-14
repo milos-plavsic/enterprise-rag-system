@@ -138,10 +138,18 @@ const search = async page => {
     page = await fresh();
     await signIn(page,'avery',currentLink);
     await page.getByText('Access is no longer available.',{exact:true}).waitFor();
-    operator('update',`users/${accounts.avery.sub}`,'-r','juniper','-s','enabled=false');
+    const disabled = {...user(),enabled:false};
+    docker(['exec','-T','idp','/opt/keycloak/bin/kcadm.sh','update',userPath,'-r','juniper','-n','-f','-'],false,JSON.stringify(disabled));
+    assert.equal(user().enabled,false);
     page = await fresh();
+    const credentialsSubmitted = page.waitForResponse(r => r.request().method() === 'POST' &&
+      new URL(r.url()).origin === 'https://localhost:8443' && new URL(r.url()).pathname.includes('/login-actions/authenticate'));
     await signIn(page,'avery');
-    await page.locator('#input-error').waitFor();
+    const refusal = await credentialsSubmitted;
+    assert.ok(refusal.status() === 200 || refusal.status() === 400 || refusal.status() === 403,
+      `unexpected disabled-login status ${refusal.status()}`);
+    await page.waitForURL(url => url.origin === 'https://localhost:8443' && url.pathname.includes('/login-actions/'));
+    await page.getByText(/invalid username or password|account is disabled|account disabled|invalid credentials/i).first().waitFor();
     console.log('PASS: fresh role mismatch denied and disabled account cannot sign in.');
     // Restart the API during the outage to remove cached signing keys.
     compose('stop','idp');
