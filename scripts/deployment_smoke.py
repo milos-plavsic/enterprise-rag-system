@@ -208,6 +208,11 @@ def main(image: str) -> None:
             docker("logs", "--no-color", check=False)
             raise
         finally:
+            # Private recovery evidence is owned by the service UID; clean it as that
+            # UID before the runner tries to remove the disposable host directory.
+            docker("run", "--rm", "--no-deps", "api", "python", "-c",
+                   "import shutil; from pathlib import Path; "
+                   "[shutil.rmtree(p) for p in Path('/var/lib/rag').glob('.failed-catalog-*')]", check=False)
             docker("down", "--volumes", "--remove-orphans", check=False)
 
 
