@@ -1,6 +1,6 @@
 # Permission-Aware Enterprise Retrieval (experimental v2)
 
-For the separate, evidence-only enterprise deployment candidate, see [deployment and release gates](docs/PRODUCTION.md). The demo below is not a production deployment.
+For the separate, evidence-only enterprise deployment candidate, see [deployment and release gates](docs/PRODUCTION.md). The demo below is not a production deployment. To reproduce a fictional enterprise workflow with local sign-in and versioned citations, see the [Juniper Works reference lab](docs/REFERENCE_LAB.md).
 
 Python demonstration of authenticated, permission-filtered retrieval over actual
 PDF text, SQLite transactions and JSON logs. Optional sentence-transformer

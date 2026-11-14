@@ -9,3 +9,7 @@ data/
 .ruff_cache/
 .venv/
 venv/
+
+.juniper-lab/
+**/node_modules/
+**/*.gguf

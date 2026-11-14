@@ -52,3 +52,8 @@ data/
 # Environment variables
 .env
 .env.local
+
+# Local reference lab, including disposable identity credentials
+.juniper-lab/
+node_modules/
+*.gguf

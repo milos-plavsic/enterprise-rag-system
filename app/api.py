@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from collections import defaultdict, deque
 from functools import lru_cache
 from pathlib import Path
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Path as PathParam, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -25,6 +25,8 @@ from jwt.exceptions import PyJWKClientConnectionError
 from pdf_transport import parser_ready
 from production_runtime import Settings, audit, deployment_lock, production_mode, store
 from rag_service import extract_pages
+from production_store import evidence_response
+from reference_answer import LocalSelector, choose
 
 log = logging.getLogger("enterprise_rag.api")
 @asynccontextmanager
@@ -52,6 +54,19 @@ class DemoStatic(StaticFiles):
         return await super().get_response(path, scope)
 
 
+class ReferenceStatic(StaticFiles):
+    async def get_response(self, path, scope):
+        if os.getenv("RAG_PROFILE") != "reference":
+            return JSONResponse(status_code=404, content={"detail": "not found"})
+        response = await super().get_response(path, scope)
+        response.headers.update({"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+                                 "X-Content-Type-Options": "nosniff", "Content-Security-Policy":
+                                 "default-src 'none'; script-src 'self'; style-src 'self'; "
+                                 "connect-src 'self' https://localhost:8443; base-uri 'none'; frame-ancestors 'none'"})
+        return response
+
+
+app.mount("/reference", ReferenceStatic(directory=Path(__file__).with_name("reference_ui"), html=True), name="reference")
 app.mount("/ui", DemoStatic(directory=Path(__file__).with_name("static"), html=True), name="ui")
 MAX_MULTIPART_BYTES = MAX_UPLOAD_BYTES + 65_536
 MAX_QUERY_BODY = 32_768
@@ -106,7 +121,8 @@ async def request_audit(request: Request, call_next):
     if settings is None:
         return response
     event = {("POST", "/v1/query"): "query", ("POST", "/v1/documents/upload"): "upload"}.get(
-        (request.method, request.url.path), "document_delete" if request.method == "DELETE" else "other_api")
+        (request.method, request.url.path), "document_delete" if request.method == "DELETE" else
+        "citation" if request.method == "GET" and "/passages/" in request.url.path else "other_api")
     audit(settings, event=event, outcome=str(response.status_code),
           subject=getattr(request.state, "subject", None), request_id=request.state.request_id,
           sources=getattr(request.state, "sources", None), elapsed_ms=round((time.monotonic() - started) * 1000))
@@ -117,6 +133,7 @@ async def request_audit(request: Request, call_next):
 class QueryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     query: str = Field(min_length=1, max_length=2000)
+    answer: bool = False
 
 @lru_cache(maxsize=1)
 def authenticator() -> TokenAuthenticator | OIDCAuthenticator:
@@ -234,7 +251,17 @@ def query(request: Request, body: QueryRequest, identity: Identity = Depends(aut
             if not query_slots.acquire(blocking=False):
                 raise HTTPException(status_code=503, detail="query capacity reached", headers={"Retry-After": "1"})
             try:
-                response = store(settings).query(body.query, identity)
+                database = store(settings)
+                response = database.query(body.query, identity, ranking=settings.ranking, reference=settings.reference)
+                if body.answer and settings.local_answer and response["evidence"]:
+                    selected = choose(body.query, response["evidence"], LocalSelector())
+                    still_allowed = database.revalidate(identity, response["evidence"])
+                    response = evidence_response(still_allowed)
+                    if selected and {row["id"] for row, _ in selected} <= {row["id"] for row in still_allowed}:
+                        citations = {row["id"]: row for row in response["citations"]}
+                        response.update(status="selected_quotes", answer="\n".join(quote for _, quote in selected),
+                                        excerpts=[{"quote": quote, "citation": citations[row["id"]]}
+                                                  for row, quote in selected])
             finally:
                 query_slots.release()
             request.state.sources = [citation["source"] for citation in response["citations"]]
@@ -346,3 +373,20 @@ def delete_document(request: Request, source: uuid.UUID, identity: Identity = De
     if not deleted:
         raise HTTPException(status_code=404, detail="document not found")
     request.state.sources = [source.hex]
+
+
+@app.get("/v1/documents/{source}/passages/{page}/{ordinal}")
+def passage(request: Request, source: uuid.UUID, page: int = PathParam(ge=1, le=50),
+            ordinal: int = PathParam(ge=1, le=3000), identity: Identity = Depends(authenticated)) -> dict:
+    settings = active_settings(request)
+    try:
+        result = store(settings).citation(identity, source.hex, page, ordinal) if settings else None
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="access denied") from None
+    except Exception:
+        log.error("citation lookup failed")
+        raise HTTPException(status_code=503, detail="citation unavailable") from None
+    if result is None:
+        raise HTTPException(status_code=404, detail="passage not found")
+    request.state.sources = [source.hex]
+    return result

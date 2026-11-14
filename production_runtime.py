@@ -18,9 +18,9 @@ log = logging.getLogger("uvicorn.error")
 
 def production_mode() -> bool:
     profile = os.getenv("RAG_PROFILE", "demo")
-    if profile not in {"demo", "production"}:
+    if profile not in {"demo", "production", "reference"}:
         raise RuntimeError("invalid runtime profile")
-    return profile == "production"
+    return profile != "demo"
 
 
 @dataclass(frozen=True)
@@ -28,6 +28,9 @@ class Settings:
     database: Path
     parser_socket: str
     audit_key: bytes
+    reference: bool = False
+    local_answer: bool = False
+    ranking: str = "lexical"
 
     @classmethod
     def load(cls) -> Settings:
@@ -42,7 +45,14 @@ class Settings:
         audit_key = Path(os.environ["RAG_AUDIT_KEY_FILE"]).read_bytes().strip()
         if len(audit_key) < 32 or len(audit_key) > 256:
             raise RuntimeError("audit key must contain 32 to 256 bytes")
-        return cls(database, str(socket), audit_key)
+        reference = os.getenv("RAG_PROFILE") == "reference"
+        local_answer = os.getenv("RAG_REFERENCE_ANSWER", "off")
+        if local_answer not in {"off", "local"} or local_answer != "off" and not reference:
+            raise RuntimeError("local answer mode is only available in the reference lab")
+        ranking = os.getenv("RAG_REFERENCE_RANKING", "lexical")
+        if ranking not in {"lexical", "concept", "semantic"} or ranking != "lexical" and not reference:
+            raise RuntimeError("alternative ranking is only available in the reference lab")
+        return cls(database, str(socket), audit_key, reference, local_answer == "local", ranking)
 
 
 @contextmanager

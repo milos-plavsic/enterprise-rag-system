@@ -251,3 +251,18 @@ def test_restore_activation_requires_quarantine_and_stopped_service(production, 
     assert not snapshot.exists()
     separate.readiness()
     assert not separate.entitled(Identity("alice", "manager", int(time.time()) + 2))
+
+
+def test_citation_routes_recheck_owner_and_current_grant(production):
+    client, db, headers, _ = production
+    uploaded = client.post("/v1/documents/upload", headers=headers(),
+                           files={"file": ("sample.txt", b"Hemlock handbook revision")})
+    assert uploaded.status_code == 201
+    citation = ask(client, headers(), "Hemlock").json()["citations"][0]
+    path = citation["href"]
+    found = client.get(path, headers=headers())
+    assert found.status_code == 200 and found.json()["id"] == citation["id"]
+    assert found.headers["cache-control"] == "no-store"
+    assert client.get(path, headers=headers("bob")).status_code == 404
+    db.set_principal("alice", None)
+    assert client.get(path, headers=headers()).status_code == 403

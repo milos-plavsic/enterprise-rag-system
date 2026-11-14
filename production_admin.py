@@ -47,6 +47,9 @@ def main() -> None:
     commands = cli.add_subparsers(dest="command", required=True)
     commands.add_parser("init")
     commands.add_parser("inspect")
+    commands.add_parser("migrate")
+    sync = commands.add_parser("sync-source")
+    sync.add_argument("directory", type=Path)
     grant = commands.add_parser("grant")
     grant.add_argument("subject")
     grant.add_argument("role", choices=sorted(ROLES))
@@ -72,6 +75,12 @@ def main() -> None:
     db = ProductionStore(args.database)
     if args.command == "init":
         db.initialize()
+    elif args.command == "migrate":
+        with deployment_lock(db.path):
+            db.migrate()
+    elif args.command == "sync-source":
+        from document_source import sync
+        print(json.dumps(sync(db, args.directory, parser_socket=os.getenv("RAG_PARSER_SOCKET"))))
     elif args.command == "inspect":
         print(db.inspect())
     elif args.command == "grant":

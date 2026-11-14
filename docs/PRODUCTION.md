@@ -2,6 +2,8 @@
 
 This is an evidence-only profile for **one enterprise security domain, one linux/amd64 host and one API process**. It is not a hosted multi-tenant service or an HA system. It is not approved for enterprise data until the deployment-specific gates below are met. The local demo remains separate and keeps its structured synthetic queries, demo authentication, optional generation and browser interface. The production profile exposes document retrieval and does not execute demo SQL, generate text, load an embedding model or send evidence to a model provider.
 
+The separately configured [Juniper Works reference lab](REFERENCE_LAB.md) is a fictional local demonstration, not a replacement for this profile or its enterprise release gates. Production continues to reject local answer mode and alternative ranking.
+
 ## Install and operate
 
 1. Retrieve the CI image bundle, SBOM and checksum manifest from the approved `main` build. Verify the attestation with `gh attestation verify rag-image.tar.gz --repo milos-plavsic/enterprise-rag-system --signer-workflow milos-plavsic/enterprise-rag-system/.github/workflows/production.yml`, repeat for the SBOM and image ID, then verify `sha256sum -c SHA256SUMS`. Load the verified tar and compare `docker image inspect --format '{{.Id}}' IMAGE` with `rag-image.id`. Import that image into the approved registry and configure `RAG_IMAGE` using its **registry digest**, not a mutable tag. Use the same digest for the API and parser. The workflow does not auto-publish or deploy.
