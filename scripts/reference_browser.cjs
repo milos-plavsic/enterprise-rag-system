@@ -9,8 +9,8 @@ const directory = process.env.RAG_LAB_PATH;
 const origin = 'http://localhost:8000';
 const accounts = JSON.parse(readFileSync(path.join(directory, 'keycloak/accounts.json')));
 const prefix = ['compose', '--env-file', path.join(directory, 'compose.env'), '-p', 'juniper-reference', '-f', 'compose.production.yml', '-f', 'compose.reference.yml'];
-function docker(args, capture = false) {
-  const result = spawnSync('docker', [...prefix, ...args], {stdio: capture ? ['ignore','pipe','inherit'] : 'inherit', encoding:'utf8',timeout:90000});
+function docker(args, capture = false, input) {
+  const result = spawnSync('docker', [...prefix, ...args], {stdio: [input === undefined ? 'ignore' : 'pipe',capture ? 'pipe' : 'inherit','inherit'], input, encoding:'utf8',timeout:90000});
   assert.equal(result.status, 0, `compose command failed: ${args[0]}`);
   return result.stdout;
 }
@@ -123,7 +123,12 @@ const search = async page => {
     await page.getByRole('button',{name:'Search',exact:true}).click();
     await page.getByText(/consolidated every Tuesday/).first().waitFor();
     console.log('PASS: freshly rotated Keycloak signing key works with a cold verifier.');
-    operator('update',`users/${accounts.avery.sub}`,'-r','juniper','-s','attributes.rag_role=["auditor"]');
+    const userPath = `users/${accounts.avery.sub}`;
+    const user = () => JSON.parse(docker(['exec','-T','idp','/opt/keycloak/bin/kcadm.sh','get',userPath,'-r','juniper'],true));
+    const identity = user();
+    identity.attributes = {...identity.attributes,rag_role:['auditor']};
+    docker(['exec','-T','idp','/opt/keycloak/bin/kcadm.sh','update',userPath,'-r','juniper','-n','-f','-'],false,JSON.stringify(identity));
+    assert.deepEqual(user().attributes.rag_role,['auditor']);
     page = await fresh();
     await signIn(page,'avery',currentLink);
     await page.getByText('Access is no longer available.',{exact:true}).waitFor();
