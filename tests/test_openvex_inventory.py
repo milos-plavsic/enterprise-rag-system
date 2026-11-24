@@ -71,3 +71,17 @@ def test_inventory_does_not_waive_release_gate(tmp_path):
     path = tmp_path / "scan.json"
     path.write_text(json.dumps(raw), encoding="utf-8")
     assert release_gate(path) == 1
+
+
+@pytest.mark.parametrize("severity", ["High", "Critical", "Unknown"])
+def test_gate_blocks_unresolved_severity(tmp_path, severity):
+    path = tmp_path / "scan.json"
+    path.write_text(json.dumps(report(match(severity=severity))), encoding="utf-8")
+    assert release_gate(path) == 1
+
+
+def test_gate_rejects_unrecognized_severity(tmp_path):
+    path = tmp_path / "scan.json"
+    path.write_text(json.dumps(report(match(severity="typo"))), encoding="utf-8")
+    with pytest.raises(ValueError, match="unrecognized scanner severity"):
+        release_gate(path)
