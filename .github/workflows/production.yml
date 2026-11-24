@@ -1,5 +1,8 @@
 name: Production profile
 on:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
   pull_request:
     branches: [main]
   push:
@@ -32,6 +35,17 @@ jobs:
         with:
           name: rag-image-scan-${{ github.sha }}
           path: ${{ steps.scan.outputs.json }}
+          if-no-files-found: error
+      - name: Record image-bound OpenVEX investigation evidence
+        env:
+          RAG_SCAN_REPORT: ${{ steps.scan.outputs.json }}
+        run: |
+          image_id=$(docker image inspect --format '{{.Id}}' rag-candidate:${GITHUB_SHA})
+          python3 scripts/openvex_inventory.py "$RAG_SCAN_REPORT" "$image_id" rag-investigation.openvex.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rag-vex-investigation-${{ github.sha }}
+          path: rag-investigation.openvex.json
           if-no-files-found: error
       - name: Enforce high and critical vulnerability gate
         env:
