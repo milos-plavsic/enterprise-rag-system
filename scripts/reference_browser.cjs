@@ -40,6 +40,41 @@ async function waitForStatus(route, expected, timeoutMs = 30_000) {
   }
   throw Error(`Timed out waiting for ${route} to return ${expected}.`);
 }
+// Admin key activation is not proof that the public JWKS endpoint has converged.
+async function waitForPublishedSigningKey(kid, timeoutMs = 30000) {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    const result = spawnSync('curl', ['--silent','--fail','--max-time','4','--cacert',
+      path.join(directory,'cert.pem'),
+      'https://localhost:8443/realms/juniper/protocol/openid-connect/certs'],
+      {encoding:'utf8',timeout:5000});
+    if (result.status === 0) {
+      const jwks = JSON.parse(result.stdout);
+      if (jwks.keys.some(key => key.kid === kid && key.kty === 'RSA' && key.use === 'sig')) return;
+    }
+    await new Promise(resolve => setTimeout(resolve,500));
+  }
+  throw Error('Rotated signing key was not published in the trusted JWKS within 30 seconds.');
+}
+async function expectRotatedSignIn(page) {
+  // Capture only HTTP status, not URLs, response bodies, credentials or tokens.
+  let tokenStatus = 'no response';
+  const observe = response => {
+    const url = new URL(response.url());
+    if (url.origin === 'https://localhost:8443' &&
+        url.pathname === '/realms/juniper/protocol/openid-connect/token') {
+      tokenStatus = response.status();
+    }
+  };
+  page.on('response', observe);
+  try {
+    await signIn(page,'avery');
+    await page.getByText('Signed in.',{exact:true}).waitFor();
+  } catch (error) {
+    const failed = await page.getByText('Sign-in could not be verified. Start again.',{exact:true}).isVisible();
+    throw Error(`Post-rollover sign-in failed (token endpoint status: ${tokenStatus}; callback failure: ${failed}).`, {cause:error});
+  } finally { page.off('response', observe); }
+}
 const search = async page => {
   await page.locator('#question').fill('Which expense needs manager approval?');
   await page.getByRole('button', {name:'Search',exact:true}).click();
@@ -112,13 +147,15 @@ const search = async page => {
     operator('create','components','-r','juniper','-s',`parentId=${realm.id}`,'-s','name=lab-rollover',
       '-s','providerId=rsa-generated','-s','providerType=org.keycloak.keys.KeyProvider',
       '-s','config.priority=["200"]','-s','config.algorithm=["RS256"]','-s','config.keySize=["2048"]');
-    assert.notEqual(activeSigningKey(),oldKid);
+    const newKid = activeSigningKey();
+    assert.equal(typeof newKid,'string');
+    assert.notEqual(newKid,oldKid);
+    await waitForPublishedSigningKey(newKid);
     // Fresh verifier process guarantees the old cached key set cannot mask rollover.
     compose('up','-d','--no-deps','--force-recreate','api');
     await waitForStatus('/ready',200,90000);
     page = await fresh();
-    await signIn(page,'avery');
-    await page.getByText('Signed in.',{exact:true}).waitFor();
+    await expectRotatedSignIn(page);
     await page.locator('#question').fill('Which day are office supply orders consolidated?');
     await page.getByRole('button',{name:'Search',exact:true}).click();
     await page.getByText(/consolidated every Tuesday/).first().waitFor();
