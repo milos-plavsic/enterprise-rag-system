@@ -13,7 +13,9 @@ def main(path: Path) -> int:
     for row in matches:
         vulnerability, package = row["vulnerability"], row["artifact"]
         severity = vulnerability["severity"].lower()
-        if severity not in {"high", "critical"}:
+        if severity not in {"negligible", "low", "medium", "high", "critical", "unknown"}:
+            raise ValueError("unrecognized scanner severity")
+        if severity not in {"high", "critical", "unknown"}:
             continue
         # Advisory concerns the CLI's .recover implementation, not libsqlite3.
         # CI separately proves this image has no CLI and uses the patched runtime.
@@ -27,7 +29,7 @@ def main(path: Path) -> int:
                           "versions": fix["versions"]}, ensure_ascii=True))
         failed = True
     if failed:
-        print("High or critical image findings block candidate packaging.", file=sys.stderr)
+        print("High, critical or unknown-severity image findings block candidate packaging.", file=sys.stderr)
     return int(failed)
 
 
