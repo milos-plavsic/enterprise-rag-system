@@ -54,10 +54,29 @@ jobs:
           name: rag-trivy-scan-${{ github.sha }}
           path: rag-trivy.json
           if-no-files-found: error
-      - name: Enforce high and critical vulnerability gate
+      - name: Compare scanners and evaluate secondary policy
+        id: comparison
+        continue-on-error: true
         env:
           RAG_SCAN_REPORT: ${{ steps.scan.outputs.json }}
-        run: python3 scripts/check_image_scan.py "$RAG_SCAN_REPORT"
+        run: |
+          image_id=$(docker image inspect --format '{{.Id}}' rag-candidate:${GITHUB_SHA})
+          python3 scripts/compare_image_scans.py "$RAG_SCAN_REPORT" rag-trivy.json "$image_id" rag-scan-comparison.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always() && (steps.comparison.outcome == 'success' || steps.comparison.outcome == 'failure')
+        with:
+          name: rag-scan-comparison-${{ github.sha }}
+          path: rag-scan-comparison.json
+          if-no-files-found: error
+      - name: Enforce combined fail-closed vulnerability gate
+        env:
+          RAG_SCAN_REPORT: ${{ steps.scan.outputs.json }}
+          SECONDARY_OUTCOME: ${{ steps.comparison.outcome }}
+        shell: bash
+        run: |
+          primary=0
+          python3 scripts/check_image_scan.py "$RAG_SCAN_REPORT" || primary=$?
+          [[ "$primary" == 0 && "$SECONDARY_OUTCOME" == success ]]
       - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           image: rag-candidate:${{ github.sha }}
