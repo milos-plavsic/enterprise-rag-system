@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
-import re
-
-DIGEST = re.compile(r"sha256:[0-9a-f]{64}\\Z")
+DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 
 SEVERITIES = {"negligible", "low", "medium", "high", "critical", "unknown"}
 BLOCKING = {"high", "critical", "unknown"}
@@ -43,7 +42,9 @@ def compare(grype: dict, trivy: dict, image: str) -> dict:
         add("grype", vuln["id"], pkg["name"], pkg["version"], vuln["severity"])
     trivy_blocking = []
     for result in results:
-        rows = result.get("Vulnerabilities") or []
+        rows = result.get("Vulnerabilities")
+        if rows is None:
+            rows = []
         if not isinstance(rows, list):
             raise ValueError("invalid Trivy findings")
         for row in rows:
