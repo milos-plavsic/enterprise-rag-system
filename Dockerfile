@@ -8,6 +8,11 @@ ADD --checksum=sha256:5dfd76936e795efd988d6bad4949b8d20c410d6dc9dd256da884111f66
 RUN test "$(apk --print-arch)" = x86_64 \
     && apk add --no-cache /tmp/zlib.apk /tmp/krb5-libs.apk /tmp/sqlite-libs.apk \
     && rm /tmp/zlib.apk /tmp/krb5-libs.apk /tmp/sqlite-libs.apk
+# Install exact vendor-signed stable OpenSSL package revisions together.
+# The high/critical scan remains mandatory; this revision does not resolve every advisory.
+RUN apk add --no-cache --repository https://dl-cdn.alpinelinux.org/alpine/v3.24/main \
+    'libcrypto3=3.5.9-r1' 'libssl3=3.5.9-r1' \
+    && apk info -e 'libcrypto3=3.5.9-r1' 'libssl3=3.5.9-r1'
 
 FROM patched
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 RAG_PROFILE=production
