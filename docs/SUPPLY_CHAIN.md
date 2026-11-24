@@ -80,7 +80,15 @@ and a defined revalidation trigger. Never infer non-applicability from
 application-language API names alone. No new automated allowlist is enabled.
 
 The existing narrowly documented SQLite CLI disposition is unchanged. The
-gate also rejects unknown severity and malformed severity labels.
+gate also rejects unknown severity and malformed severity labels. A second
+scanner, Trivy 0.76.2, is pinned to the vendor registry digest and scans a
+saved image archive without the Docker socket, repository mount, credentials
+or network access during the scan. Database acquisition is a separate step.
+The raw Trivy report and cross-scanner comparison are retained; both reports
+must refer to the same local image config digest and both policies must pass.
+The only matching disposition remains the exact SQLite CLI case. The release
+bundle includes both SPDX and CycloneDX inventories, hashes, and main-only
+build provenance. No registry push or signing is performed.
 Daily scheduled production assurance and manual dispatch are configured; GitHub
 runs the schedule on the default branch only. This rebuilds and rescans the
 source candidate, not a previously deployed registry digest. Existing
@@ -101,7 +109,14 @@ Dependabot Docker and GitHub Actions monitoring remains in place.
 - After authorized merge, verify the existing main-only artifact attestation
   and the immutable release identity before any use.
 
-Secondary scanner, CycloneDX, image signing at registry publication, historical
-differential reports, Python dependency-lock update automation and deployment
-monitoring remain separate work requiring tested integration. Do not claim
+Registry publication/signing, historical differential reports across scans,
+Python dependency-lock update automation, repeated browser reliability runs
+and deployment monitoring remain separate work requiring tested integration.
+Cross-scanner differences are captured, not historical trends. Do not claim
 these capabilities merely because the current workflow generates evidence.
+
+The scanner image is pinned from the [official registry](https://github.com/aquasecurity/trivy/pkgs/container/trivy).
+The [March 2026 incident advisory](https://github.com/aquasecurity/trivy/security/advisories/GHSA-69fq-xp46-6x23)
+is a reminder that scanners are supply-chain dependencies too. Independently
+verify the digest and provenance before accepting an update. This isolated
+invocation is a risk reduction, not proof of scanner integrity.
