@@ -17,7 +17,13 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-      - run: docker build --platform linux/amd64 --tag rag-candidate:${GITHUB_SHA} .
+      - name: Build candidate and capture immutable Buildx metadata
+        env:
+          BUILDX_METADATA_PROVENANCE: max
+        run: >-
+          docker buildx build --platform linux/amd64 --load --provenance=false
+          --metadata-file rag-build-metadata.json
+          --tag rag-candidate:${GITHUB_SHA} .
       - name: Verify SQLite runtime and absence of affected CLI
         run: >-
           docker run --rm --network none --entrypoint python rag-candidate:${GITHUB_SHA}
@@ -31,21 +37,38 @@ jobs:
           severity-cutoff: high
           fail-build: false
           output-format: json
+      - name: Preserve raw primary scan
+        env:
+          RAG_SCAN_REPORT: ${{ steps.scan.outputs.json }}
+        run: cp "$RAG_SCAN_REPORT" rag-grype.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: rag-image-scan-${{ github.sha }}
-          path: ${{ steps.scan.outputs.json }}
+          path: rag-grype.json
           if-no-files-found: error
-      - name: Record image-bound OpenVEX investigation evidence
-        env:
-          RAG_SCAN_REPORT: ${{ steps.scan.outputs.json }}
+      - name: Verify OCI image identity across Buildx and Grype
+        run: >-
+          python3 scripts/image_identity.py rag-build-metadata.json rag-grype.json
+          rag-candidate:${GITHUB_SHA} rag-image-identity.json
+      - name: Generate deterministic OpenVEX investigation evidence
+        run: >-
+          python3 scripts/openvex_inventory.py rag-grype.json rag-image-identity.json
+          rag-investigation.openvex.json
+      - name: Strictly validate OpenVEX v0.2.0
         run: |
-          image_id=$(docker image inspect --format '{{.Id}}' rag-candidate:${GITHUB_SHA})
-          python3 scripts/openvex_inventory.py "$RAG_SCAN_REPORT" "$image_id" rag-investigation.openvex.json
+          validator=ghcr.io/openvex/vexctl:v0.4.4@sha256:ce15c9c85ffc66cb630c0ce9c50a85e9241be77ca4e6e841ab14a0bf2a96bf7e
+          docker pull "$validator"
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
+            --mount "type=bind,src=$PWD/rag-investigation.openvex.json,dst=/vex.json,readonly" \
+            "$validator" validate --strict /vex.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: rag-vex-investigation-${{ github.sha }}
-          path: rag-investigation.openvex.json
+          path: |
+            rag-build-metadata.json
+            rag-image-identity.json
+            rag-investigation.openvex.json
           if-no-files-found: error
       - name: Secondary vulnerability scan of the saved candidate
         run: bash scripts/trivy_image_scan.sh rag-candidate:${GITHUB_SHA} rag-trivy.json
@@ -57,11 +80,9 @@ jobs:
       - name: Compare scanners and evaluate secondary policy
         id: comparison
         continue-on-error: true
-        env:
-          RAG_SCAN_REPORT: ${{ steps.scan.outputs.json }}
-        run: |
-          image_id=$(docker image inspect --format '{{.Id}}' rag-candidate:${GITHUB_SHA})
-          python3 scripts/compare_image_scans.py "$RAG_SCAN_REPORT" rag-trivy.json "$image_id" rag-scan-comparison.json
+        run: >-
+          python3 scripts/compare_image_scans.py rag-grype.json rag-trivy.json
+          rag-image-identity.json rag-scan-comparison.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always() && (steps.comparison.outcome == 'success' || steps.comparison.outcome == 'failure')
         with:
@@ -70,12 +91,11 @@ jobs:
           if-no-files-found: error
       - name: Enforce combined fail-closed vulnerability gate
         env:
-          RAG_SCAN_REPORT: ${{ steps.scan.outputs.json }}
           SECONDARY_OUTCOME: ${{ steps.comparison.outcome }}
         shell: bash
         run: |
           primary=0
-          python3 scripts/check_image_scan.py "$RAG_SCAN_REPORT" || primary=$?
+          python3 scripts/check_image_scan.py rag-grype.json || primary=$?
           [[ "$primary" == 0 && "$SECONDARY_OUTCOME" == success ]]
       - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
@@ -94,7 +114,9 @@ jobs:
       - run: |
           docker image inspect --format '{{.Id}}' rag-candidate:${GITHUB_SHA} > rag-image.id
           docker save rag-candidate:${GITHUB_SHA} | gzip > rag-image.tar.gz
-          sha256sum rag-image.tar.gz rag-image.id rag.spdx.json rag.cdx.json > SHA256SUMS
+          sha256sum rag-image.tar.gz rag-image.id rag.spdx.json rag.cdx.json \
+            rag-build-metadata.json rag-image-identity.json rag-grype.json rag-trivy.json \
+            rag-scan-comparison.json rag-investigation.openvex.json > SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: rag-candidate-${{ github.sha }}
@@ -103,6 +125,12 @@ jobs:
             rag-image.id
             rag.spdx.json
             rag.cdx.json
+            rag-build-metadata.json
+            rag-image-identity.json
+            rag-grype.json
+            rag-trivy.json
+            rag-scan-comparison.json
+            rag-investigation.openvex.json
             SHA256SUMS
           if-no-files-found: error
   attest:
@@ -120,4 +148,4 @@ jobs:
       - run: sha256sum --check SHA256SUMS
       - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
         with:
-          subject-path: rag-image.tar.gz, rag-image.id, rag.spdx.json, rag.cdx.json
+          subject-path: rag-image.tar.gz, rag-image.id, rag.spdx.json, rag.cdx.json, rag-image-identity.json, rag-investigation.openvex.json
