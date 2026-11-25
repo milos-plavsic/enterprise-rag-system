@@ -150,7 +150,7 @@ def evaluate(grype: dict, trivy: dict, evidence: dict, policy: dict, identity: d
     }
 
 
-def release_vex(policy: dict, evidence: dict, identity: dict, policy_sha256: str) -> dict:
+def release_vex(policy: dict, evidence: dict, identity: dict, policy_sha256: str, generator_sha256: str) -> dict:
     if not DIGEST.fullmatch(policy_sha256):
         raise ValueError("invalid policy digest")
     dispositions, packages = _policy(policy, evidence)
@@ -205,7 +205,7 @@ def release_vex(policy: dict, evidence: dict, identity: dict, policy_sha256: str
         "role": role,
         "timestamp": timestamp,
         "version": 1,
-        "tooling": "enterprise-rag-system/scripts/evaluate_release_findings.py",
+        "tooling": "enterprise-rag-system/scripts/evaluate_release_findings.py " + generator_sha256,
         "statements": statements,
     }
 
@@ -228,7 +228,7 @@ def main() -> int:
     identity = json.loads(args.identity.read_bytes())
     decisions = evaluate(grype, trivy, evidence, policy, identity)
     args.decisions.write_text(json.dumps(decisions, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    vex = release_vex(policy, evidence, identity, "sha256:" + hashlib.sha256(policy_raw).hexdigest())
+    generator_sha256 = "sha256:" + hashlib.sha256(Path(__file__).read_bytes()).hexdigest()\n    vex = release_vex(\n        policy, evidence, identity,\n        "sha256:" + hashlib.sha256(policy_raw).hexdigest(),\n        generator_sha256,\n    )
     args.vex.write_text(json.dumps(vex, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     for row in decisions["unresolved"]:
         print(json.dumps(row, sort_keys=True))
