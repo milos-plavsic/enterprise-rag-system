@@ -57,8 +57,8 @@ def candidate(tmp_path, mutation=None, compression="gzip"):
     if mutation == "incorrect_diff_id":
         diff_id = "sha256:" + "f" * 64
     config = as_json({
-        "architecture": "amd64",
-        "os": "linux",
+        "architecture": "arm64" if mutation == "wrong_config_arch" else "amd64",
+        "os": "windows" if mutation == "wrong_config_os" else "linux",
         "rootfs": {"type": "layers", "diff_ids": [] if mutation == "missing_diff_id" else [diff_id]},
     })
     config_name = digest(config)[7:] + ".json"
@@ -71,8 +71,12 @@ def candidate(tmp_path, mutation=None, compression="gzip"):
     if mutation == "unsupported_compression":
         layer_descriptor["mediaType"] = "application/vnd.oci.image.layer.v1.tar+zstd"
     image_manifest = as_json({
-        "schemaVersion": 2,
+        "schemaVersion": 1 if mutation == "wrong_manifest_schema" else 2,
+        "mediaType": ("application/x-malformed" if mutation == "wrong_manifest_media_type"
+                      else "application/vnd.oci.image.manifest.v1+json"),
         "config": {
+            "mediaType": ("application/x-malformed" if mutation == "wrong_config_media_type"
+                          else "application/vnd.oci.image.config.v1+json"),
             "digest": digest(config),
             "size": len(config) + (1 if mutation == "incorrect_config_size" else 0),
         },
@@ -82,7 +86,11 @@ def candidate(tmp_path, mutation=None, compression="gzip"):
     index = as_json({
         "schemaVersion": 2,
         "manifests": [
-            {"digest": manifest_digest, "size": len(image_manifest)}
+            {"digest": manifest_digest, "size": len(image_manifest),
+             "mediaType": ("application/x-malformed" if mutation == "wrong_index_media_type"
+                           else "application/vnd.oci.image.manifest.v1+json"),
+             "platform": {"os": "windows" if mutation == "wrong_index_os" else "linux",
+                          "architecture": "amd64"}}
         ] * (2 if mutation == "multiple_index_descriptors" else 1),
     })
     archive_layer_name = (
@@ -132,6 +140,13 @@ def test_real_rootfs_content_is_bound_to_oci_manifest(tmp_path, compression):
     "unsafe_layer_name",
     "modified_manifest_blob",
     "duplicate_archive_member",
+    "wrong_config_arch",
+    "wrong_config_os",
+    "wrong_manifest_schema",
+    "wrong_manifest_media_type",
+    "wrong_config_media_type",
+    "wrong_index_media_type",
+    "wrong_index_os",
 ])
 def test_every_image_content_or_identity_tamper_fails_closed(tmp_path, mutation):
     path, _ = candidate(tmp_path, mutation=mutation)

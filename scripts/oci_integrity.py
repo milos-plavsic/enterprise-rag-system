@@ -70,6 +70,19 @@ def verify_oci_archive(
     ):
         raise ValueError("OCI index must contain exactly one image descriptor")
     descriptor = descriptors[0]
+    allowed_manifests = {
+        "application/vnd.oci.image.manifest.v1+json",
+        "application/vnd.docker.distribution.manifest.v2+json",
+    }
+    if descriptor.get("mediaType") not in (None, *allowed_manifests):
+        raise ValueError("unsupported OCI index image descriptor media type")
+    platform = descriptor.get("platform")
+    if platform is not None and (
+        not isinstance(platform, dict)
+        or platform.get("os") != "linux"
+        or platform.get("architecture") != "amd64"
+    ):
+        raise ValueError("OCI index platform does not match linux/amd64")
     canonical_digest = _digest(descriptor.get("digest"), "OCI image manifest")
     manifest_raw = _read_member(
         archive, "blobs/sha256/" + canonical_digest.split(":", 1)[1],
@@ -81,15 +94,32 @@ def verify_oci_archive(
     ):
         raise ValueError("OCI index manifest descriptor does not match blob bytes")
     manifest = json.loads(manifest_raw)
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schemaVersion") != 2
+        or manifest.get("mediaType") not in (None, *allowed_manifests)
+    ):
+        raise ValueError("unsupported OCI image manifest schema or media type")
     config_digest = "sha256:" + hashlib.sha256(config_raw).hexdigest()
     manifest_config = manifest.get("config")
+    allowed_configs = {
+        "application/vnd.oci.image.config.v1+json",
+        "application/vnd.docker.container.image.v1+json",
+    }
     if (
         not isinstance(manifest_config, dict)
+        or manifest_config.get("mediaType") not in (None, *allowed_configs)
         or manifest_config.get("digest") != config_digest
         or manifest_config.get("size") != len(config_raw)
     ):
         raise ValueError("OCI image manifest does not reference archive config")
     config = json.loads(config_raw)
+    if (
+        not isinstance(config, dict)
+        or config.get("os") != "linux"
+        or config.get("architecture") != "amd64"
+    ):
+        raise ValueError("OCI image config platform does not match linux/amd64")
     rootfs = config.get("rootfs")
     diff_ids = rootfs.get("diff_ids") if isinstance(rootfs, dict) else None
     layers = manifest.get("layers")
