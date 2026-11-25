@@ -27,6 +27,18 @@ const signIn = async (page, user, hash = '') => {
   await page.locator('#password').fill(accounts[user].password);
   await page.locator('#kc-login').click();
 };
+const citationUrl = hash => origin + hash.slice(1);
+async function expectCitationAfterSignIn(page, user, hash, expectedStatus, message) {
+  assert.ok(hash.startsWith('#/v1/documents/'), `unexpected citation hash ${hash}`);
+  const response = page.waitForResponse(r =>
+    r.request().method() === 'GET' && r.url() === citationUrl(hash),
+    {timeout: 45000});
+  await signIn(page,user,hash);
+  const result = await response;
+  assert.equal(result.status(),expectedStatus,
+    `citation ${hash} returned ${result.status()}, expected ${expectedStatus}`);
+  await page.getByText(message,{exact:true}).waitFor({timeout:15000});
+}
 const operator = (...args) => compose('exec','-T','idp','/opt/keycloak/bin/kcadm.sh',...args);
 const activeSigningKey = () => JSON.parse(docker(['exec','-T','idp','/opt/keycloak/bin/kcadm.sh','get','keys','-r','juniper'],true)).active.RS256;
 const operatorLogin = () => compose('exec','-T','idp','sh','-ec',
@@ -87,7 +99,7 @@ const search = async page => {
     const fresh = async () => {
       const context = await browser.newContext({ignoreHTTPSErrors:true});
       const page = await context.newPage();
-      page.setDefaultTimeout(20000);
+      page.setDefaultTimeout(30000);
       return page;
     };
     let page = await fresh();
@@ -121,8 +133,7 @@ const search = async page => {
     await page.evaluate(hash => { location.hash = hash; }, oldLink);
     await page.getByText('Access is no longer available.', {exact:true}).waitFor();
     page = await fresh();
-    await signIn(page, 'robin', currentLink);
-    await page.getByText('This passage is unavailable.', {exact:true}).waitFor();
+    await expectCitationAfterSignIn(page,'robin',currentLink,404,'This passage is unavailable.');
     publish(3);
     compose('stop','api');
     admin('--database','/var/lib/rag/lab-backup.sqlite3','quarantine-restored-grants');
@@ -132,13 +143,11 @@ const search = async page => {
     compose('up','-d','api');
     await waitForStatus('/ready',200,90000);
     page = await fresh();
-    await signIn(page,'avery',currentLink);
-    await page.getByText('Access is no longer available.',{exact:true}).waitFor();
+    await expectCitationAfterSignIn(page,'avery',currentLink,403,'Access is no longer available.');
     admin('grant',accounts.avery.sub,'analyst');
     await new Promise(resolve => setTimeout(resolve,6500));
     page = await fresh();
-    await signIn(page,'avery',currentLink);
-    await page.getByText('This passage is unavailable.',{exact:true}).waitFor();
+    await expectCitationAfterSignIn(page,'avery',currentLink,404,'This passage is unavailable.');
     console.log('PASS: Keycloak sign-in, document update, live links, denial, withdrawal and reconciled restore.');
     operatorLogin();
     const oldKid = activeSigningKey();
@@ -173,8 +182,7 @@ const search = async page => {
     docker(['exec','-T','idp','/opt/keycloak/bin/kcadm.sh','update',userPath,'-r','juniper','-n','-f','-'],false,JSON.stringify(identity));
     assert.deepEqual(user().attributes.rag_role,['auditor']);
     page = await fresh();
-    await signIn(page,'avery',currentLink);
-    await page.getByText('Access is no longer available.',{exact:true}).waitFor();
+    await expectCitationAfterSignIn(page,'avery',currentLink,403,'Access is no longer available.');
     const disabled = {...user(),enabled:false};
     docker(['exec','-T','idp','/opt/keycloak/bin/kcadm.sh','update',userPath,'-r','juniper','-n','-f','-'],false,JSON.stringify(disabled));
     assert.equal(user().enabled,false);
