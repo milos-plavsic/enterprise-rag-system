@@ -49,7 +49,7 @@ def _policy(policy: dict, evidence: dict) -> tuple[dict, set[str]]:
     if not isinstance(dispositions, dict) or not dispositions:
         raise ValueError("dispositions missing")
     if set(dispositions) != EXPECTED_OPENSSL_CVES:
-        raise ValueError("OpenSSL disposition set must match the independently reviewed CVEs")
+        raise ValueError("OpenSSL disposition set must match the explicit reviewed CVE scope")
     source_digest = evidence.get("source_tree_sha256")
     if not isinstance(source_digest, str) or not DIGEST.fullmatch(source_digest):
         raise ValueError("runtime source digest missing")
