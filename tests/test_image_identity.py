@@ -45,8 +45,9 @@ def report():
 
 
 def test_links_build_config_to_validated_scanner_manifest():
-    receipt = identity(build(), report(), REF)
+    receipt = identity(build(), report(), REF, CONFIG)
     assert receipt["config_digest"] == CONFIG
+    assert receipt["buildx_config_digest"] == CONFIG
     assert receipt["buildx_manifest_digest"] == BUILD_MANIFEST
     assert receipt["manifest_digest"] == report()["source"]["target"]["manifestDigest"]
     assert receipt["product_id"].endswith(receipt["manifest_digest"].split(":", 1)[1])
@@ -65,4 +66,17 @@ def test_identity_mismatch_fails_closed(case):
     else:
         g["descriptor"]["name"] = "not-grype"
     with pytest.raises(ValueError):
-        identity(b, g, REF)
+        identity(b, g, REF, CONFIG)
+
+
+def test_missing_buildx_digest_fields_are_allowed_when_docker_and_grype_agree():
+    metadata = {}
+    receipt = identity(metadata, report(), REF, CONFIG)
+    assert receipt["config_digest"] == CONFIG
+    assert receipt["buildx_config_digest"] is None
+    assert receipt["buildx_manifest_digest"] is None
+
+
+def test_docker_config_mismatch_fails_closed():
+    with pytest.raises(ValueError, match="Docker and Grype config digests differ"):
+        identity({}, report(), REF, "sha256:" + "d" * 64)
