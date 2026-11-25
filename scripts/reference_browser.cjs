@@ -45,27 +45,37 @@ const signIn = async (page, user, hash = '', expectCallback = true) => {
   // fail with Chromium ERR_NETWORK_CHANGED while Docker recreates lab networks.
   const exchanged = expectCallback ? page.waitForResponse(isTokenPost,{timeout:45000}) : null;
   await page.locator('#kc-login').click();
-  const response = await submitted;
+  const credentialResponse = await submitted;
+  let accessToken;
   if (exchanged) {
     const tokenResponse = await exchanged;
     assert.equal(tokenResponse.status(),200,
       `token endpoint returned ${tokenResponse.status()}`);
+    const payload = await tokenResponse.json();
+    assert.equal(typeof payload.access_token,'string','token response missing access token');
+    accessToken = payload.access_token;
     // A callback carrying a citation hash immediately replaces the status
     // with the citation result; only no-hash logins have a stable Signed in state.
     if (!hash) await page.getByText('Signed in.',{exact:true}).waitFor({timeout:15000});
   }
-  return response;
+  return {credentialResponse,accessToken};
 };
 const citationUrl = hash => origin + hash.slice(1);
 async function expectCitationAfterSignIn(page, user, hash, expectedStatus, message) {
   assert.ok(hash.startsWith('#/v1/documents/'), `unexpected citation hash ${hash}`);
-  const response = page.waitForResponse(r =>
-    r.request().method() === 'GET' && r.url() === citationUrl(hash),
-    {timeout: 45000});
-  await signIn(page,user,hash);
-  const result = await response;
-  assert.equal(result.status(),expectedStatus,
-    `citation ${hash} returned ${result.status()}, expected ${expectedStatus}`);
+  const {accessToken} = await signIn(page,user,hash);
+  assert.equal(typeof accessToken,'string','callback did not yield an access token');
+  // The deep-link UI assertion below proves the browser callback followed the
+  // requested citation. Verify the authorization status independently so a
+  // Playwright network-event race cannot hide or fabricate a 403/404 result.
+  const verification = await fetch(citationUrl(hash), {
+    headers:{Authorization:`Bearer ${accessToken}`},
+    redirect:'error',
+    signal:AbortSignal.timeout(15000),
+  });
+  assert.equal(verification.status,expectedStatus,
+    `citation ${hash} returned ${verification.status}, expected ${expectedStatus}`);
+  await verification.arrayBuffer();
   await page.getByText(message,{exact:true}).waitFor({timeout:15000});
 }
 async function expectCitationHash(page, hash, expectedStatus, message) {
@@ -219,7 +229,7 @@ const search = async page => {
     docker(['exec','-T','idp','/opt/keycloak/bin/kcadm.sh','update',userPath,'-r','juniper','-n','-f','-'],false,JSON.stringify(disabled));
     assert.equal(user().enabled,false);
     page = await fresh();
-    const refusal = await signIn(page,'avery','',false);
+    const {credentialResponse: refusal} = await signIn(page,'avery','',false);
     assert.ok(refusal.status() === 200 || refusal.status() === 400 || refusal.status() === 403,
       `unexpected disabled-login status ${refusal.status()}`);
     await page.waitForURL(url => url.origin === 'https://localhost:8443' && url.pathname.includes('/login-actions/'));
