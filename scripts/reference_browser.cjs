@@ -196,12 +196,36 @@ const search = async page => {
   await page.getByRole('button', {name:'Search',exact:true}).click();
 };
 
+async function waitForBrowserNetwork(context, timeoutMs = 30000) {
+  const discovery = idpOrigin + idpRealm + '/.well-known/openid-configuration';
+  const until = Date.now() + timeoutMs;
+  let consecutive = 0;
+  while (Date.now() < until) {
+    const probePage = await context.newPage();
+    try {
+      const response = await probePage.goto(discovery,{waitUntil:'domcontentloaded',timeout:5000});
+      consecutive = response && response.status() === 200 ? consecutive + 1 : 0;
+    } catch (error) {
+      // Docker network transitions can briefly surface Chromium ERR_NETWORK_CHANGED.
+      // This is an environment readiness probe; the authentication flow itself is
+      // never retried or accepted after a failed attempt.
+      consecutive = 0;
+    } finally {
+      await probePage.close();
+    }
+    if (consecutive >= 2) return;
+    await new Promise(resolve => setTimeout(resolve,300));
+  }
+  throw Error('Chromium could not establish a stable connection to the reference IdP.');
+}
+
 (async () => {
   const browser = await chromium.launch({headless:true, ...(process.env.RAG_BROWSER_EXECUTABLE ? {executablePath:process.env.RAG_BROWSER_EXECUTABLE} : {})});
   try {
     // The lab uses a disposable local certificate. curl checks its exact CA separately.
     const fresh = async () => {
       const context = await browser.newContext({ignoreHTTPSErrors:true});
+      await waitForBrowserNetwork(context);
       const page = await context.newPage();
       page.setDefaultTimeout(30000);
       page.setDefaultNavigationTimeout(45000);
