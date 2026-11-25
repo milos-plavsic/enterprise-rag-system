@@ -51,7 +51,9 @@ const signIn = async (page, user, hash = '', expectCallback = true) => {
     const tokenResponse = await exchanged;
     assert.equal(tokenResponse.status(),200,
       `token endpoint returned ${tokenResponse.status()}`);
-    await page.getByText('Signed in.',{exact:true}).waitFor({timeout:15000});
+    // A callback carrying a citation hash immediately replaces the status
+    // with the citation result; only no-hash logins have a stable Signed in state.
+    if (!hash) await page.getByText('Signed in.',{exact:true}).waitFor({timeout:15000});
   }
   return response;
 };
