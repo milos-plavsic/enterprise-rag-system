@@ -24,8 +24,8 @@ jobs:
           docker buildx build --platform linux/amd64 --load --provenance=false
           --metadata-file rag-build-metadata.json
           --tag rag-candidate:${GITHUB_SHA} .
-      - name: Record loaded candidate config digest
-        run: docker image inspect --format '{{.Id}}' rag-candidate:${GITHUB_SHA} > rag-image.id
+      - name: Save exact candidate Docker archive
+        run: docker save rag-candidate:${GITHUB_SHA} -o rag-image.tar
       - name: Verify SQLite runtime and absence of affected CLI
         run: >-
           docker run --rm --network none --entrypoint python rag-candidate:${GITHUB_SHA}
@@ -51,7 +51,7 @@ jobs:
       - name: Verify OCI image identity across Buildx and Grype
         run: >-
           python3 scripts/image_identity.py rag-build-metadata.json rag-grype.json
-          rag-candidate:${GITHUB_SHA} rag-image.id rag-image-identity.json
+          rag-candidate:${GITHUB_SHA} rag-image.tar rag-image-identity.json
       - name: Collect isolated OpenSSL reachability evidence
         run: |
           docker image inspect rag-candidate:${GITHUB_SHA} > rag-image-inspect.json
@@ -150,8 +150,15 @@ jobs:
           upload-artifact: false
           upload-release-assets: false
       - run: |
-          test "$(docker image inspect --format '{{.Id}}' rag-candidate:${GITHUB_SHA})" = "$(cat rag-image.id)"
-          docker save rag-candidate:${GITHUB_SHA} | gzip > rag-image.tar.gz
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          identity = json.loads(Path("rag-image-identity.json").read_text())
+          digest = hashlib.sha256(Path("rag-image.tar").read_bytes()).hexdigest()
+          assert "sha256:" + digest == identity["archive_sha256"]
+          Path("rag-image.id").write_text(identity["config_digest"] + "\n")
+          PY
+          gzip -c rag-image.tar > rag-image.tar.gz
           sha256sum rag-image.tar.gz rag-image.id rag.spdx.json rag.cdx.json \
             rag-build-metadata.json rag-image-identity.json rag-grype.json rag-trivy.json \
             rag-scan-comparison.json rag-investigation.openvex.json rag-openssl-evidence.json \
