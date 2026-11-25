@@ -36,10 +36,13 @@ const isTokenPost = response => response.request().method() === 'POST' &&
 const signIn = async (page, user, hash = '', expectCallback = true) => {
   await page.goto(`${origin}/reference/${hash}`,
     {waitUntil:'domcontentloaded',timeout:45000});
-  const atIdp = page.waitForURL(isIdpAuth,{timeout:45000});
   await page.getByRole('button',{name:'Sign in'}).click();
-  await atIdp;
+  // The visible Keycloak credential form is the stable navigation condition.
+  // Chromium can emit ERR_NETWORK_CHANGED during Docker network transitions even
+  // when the destination loaded successfully, so do not couple correctness to a
+  // navigation event. Verify the actual loaded URL after the form is present.
   await page.locator('#username').waitFor({state:'visible',timeout:45000});
+  assert.ok(isIdpAuth(new URL(page.url())),`unexpected identity-provider URL ${page.url()}`);
   await page.locator('#username').fill(user);
   await page.locator('#password').fill(accounts[user].password);
   const submitted = page.waitForResponse(isCredentialPost,{timeout:45000});
