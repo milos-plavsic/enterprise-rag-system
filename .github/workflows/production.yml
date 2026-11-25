@@ -50,6 +50,15 @@ jobs:
         run: >-
           python3 scripts/image_identity.py rag-build-metadata.json rag-grype.json
           rag-candidate:${GITHUB_SHA} rag-image-identity.json
+      - name: Collect isolated OpenSSL reachability evidence
+        run: |
+          docker image inspect rag-candidate:${GITHUB_SHA} > rag-image-inspect.json
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
+            --entrypoint python \
+            --mount "type=bind,src=$PWD/scripts/openssl_reachability.py,dst=/reachability.py,readonly" \
+            --mount "type=bind,src=$PWD/rag-image-inspect.json,dst=/image-inspect.json,readonly" \
+            rag-candidate:${GITHUB_SHA} /reachability.py /image-inspect.json - > rag-openssl-evidence.json
       - name: Generate deterministic OpenVEX investigation evidence
         run: >-
           python3 scripts/openvex_inventory.py rag-grype.json rag-image-identity.json
@@ -77,9 +86,8 @@ jobs:
           name: rag-trivy-scan-${{ github.sha }}
           path: rag-trivy.json
           if-no-files-found: error
-      - name: Compare scanners and evaluate secondary policy
+      - name: Compare independent scanner evidence
         id: comparison
-        continue-on-error: true
         run: >-
           python3 scripts/compare_image_scans.py rag-grype.json rag-trivy.json
           rag-image-identity.json rag-scan-comparison.json
@@ -89,14 +97,42 @@ jobs:
           name: rag-scan-comparison-${{ github.sha }}
           path: rag-scan-comparison.json
           if-no-files-found: error
+      - name: Evaluate exact evidence-backed release dispositions
+        id: release_policy
+        continue-on-error: true
+        run: >-
+          python3 scripts/evaluate_release_findings.py
+          rag-grype.json rag-trivy.json rag-openssl-evidence.json
+          security/openssl-3.5.9-r1-dispositions.json rag-image-identity.json
+          rag-release-decisions.json rag-release.openvex.json
+      - name: Strictly validate reviewed release OpenVEX
+        id: validate_release_vex
+        if: always() && (steps.release_policy.outcome == 'success' || steps.release_policy.outcome == 'failure')
+        continue-on-error: true
+        run: |
+          validator=ghcr.io/openvex/vexctl:v0.4.4@sha256:ce15c9c85ffc66cb630c0ce9c50a85e9241be77ca4e6e841ab14a0bf2a96bf7e
+          test -s rag-release.openvex.json
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
+            --mount "type=bind,src=$PWD/rag-release.openvex.json,dst=/vex.json,readonly" \
+            "$validator" validate --strict /vex.json
+      - name: Preserve release disposition evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rag-release-security-${{ github.sha }}
+          path: |
+            rag-openssl-evidence.json
+            rag-release-decisions.json
+            rag-release.openvex.json
+          if-no-files-found: warn
       - name: Enforce combined fail-closed vulnerability gate
         env:
-          SECONDARY_OUTCOME: ${{ steps.comparison.outcome }}
-        shell: bash
+          POLICY_OUTCOME: ${{ steps.release_policy.outcome }}
+          VEX_OUTCOME: ${{ steps.validate_release_vex.outcome }}
         run: |
-          primary=0
-          python3 scripts/check_image_scan.py rag-grype.json || primary=$?
-          [[ "$primary" == 0 && "$SECONDARY_OUTCOME" == success ]]
+          [[ "$POLICY_OUTCOME" == success ]]
+          [[ "$VEX_OUTCOME" == success ]]
       - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           image: rag-candidate:${{ github.sha }}
@@ -116,7 +152,8 @@ jobs:
           docker save rag-candidate:${GITHUB_SHA} | gzip > rag-image.tar.gz
           sha256sum rag-image.tar.gz rag-image.id rag.spdx.json rag.cdx.json \
             rag-build-metadata.json rag-image-identity.json rag-grype.json rag-trivy.json \
-            rag-scan-comparison.json rag-investigation.openvex.json > SHA256SUMS
+            rag-scan-comparison.json rag-investigation.openvex.json rag-openssl-evidence.json \
+            rag-release-decisions.json rag-release.openvex.json > SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: rag-candidate-${{ github.sha }}
@@ -131,6 +168,9 @@ jobs:
             rag-trivy.json
             rag-scan-comparison.json
             rag-investigation.openvex.json
+            rag-openssl-evidence.json
+            rag-release-decisions.json
+            rag-release.openvex.json
             SHA256SUMS
           if-no-files-found: error
   attest:
@@ -148,4 +188,4 @@ jobs:
       - run: sha256sum --check SHA256SUMS
       - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
         with:
-          subject-path: rag-image.tar.gz, rag-image.id, rag.spdx.json, rag.cdx.json, rag-image-identity.json, rag-investigation.openvex.json
+          subject-path: rag-image.tar.gz, rag-image.id, rag.spdx.json, rag.cdx.json, rag-image-identity.json, rag-investigation.openvex.json, rag-release.openvex.json
