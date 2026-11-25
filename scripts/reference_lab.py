@@ -8,7 +8,6 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_REV = "9217f5db79a29953eb74d5343926648285ec7e67"
@@ -54,21 +53,25 @@ def model(path: Path) -> None:
     digest, count = hashlib.sha256(), 0
     with tempfile.NamedTemporaryFile(dir=output.parent, delete=False) as stream:
         stage = Path(stream.name)
-        try:
-            with urlopen(MODEL_URL, timeout=60) as response:
-                while data := response.read(1024 * 1024):
-                    count += len(data)
-                    if count > MODEL_SIZE:
-                        raise RuntimeError("model size exceeded")
-                    digest.update(data)
-                    stream.write(data)
-            if count != MODEL_SIZE or digest.hexdigest() != MODEL_SHA:
-                raise RuntimeError("model failed integrity verification")
-            stream.flush()
-            stage.chmod(0o444)
-            os.link(stage, output)
-        finally:
-            stage.unlink(missing_ok=True)
+    try:
+        subprocess.run([
+            "curl", "--fail", "--silent", "--show-error", "--location",
+            "--proto", "=https", "--proto-redir", "=https", "--tlsv1.2",
+            "--max-redirs", "5", "--connect-timeout", "15", "--max-time", "300",
+            "--max-filesize", str(MODEL_SIZE), "--output", str(stage), MODEL_URL,
+        ], check=True, timeout=330)
+        with stage.open("rb") as stream:
+            while data := stream.read(1024 * 1024):
+                count += len(data)
+                if count > MODEL_SIZE:
+                    raise RuntimeError("model size exceeded")
+                digest.update(data)
+        if count != MODEL_SIZE or digest.hexdigest() != MODEL_SHA:
+            raise RuntimeError("model failed integrity verification")
+        stage.chmod(0o444)
+        os.link(stage, output)
+    finally:
+        stage.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
