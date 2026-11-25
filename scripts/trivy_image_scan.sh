@@ -18,7 +18,7 @@ docker run "${common[@]}" --mount "type=bind,src=$scratch/cache,dst=/cache" \
 # No credentials, host socket, source tree or egress during the actual scan.
 docker run "${common[@]}" --network none \
   --mount "type=bind,src=$scratch/cache,dst=/cache" \
-  --mount "type=bind,src=$scratch/image.tar,dst=/input.tar,readonly" \
+  --mount "type=bind,src=$image_tar,dst=/input.tar,readonly" \
   "$scanner" --cache-dir /cache image --input /input.tar --skip-db-update \
   --skip-java-db-update --offline-scan --scanners vuln --format json --no-progress \
   --exit-code 0 > "$output"
