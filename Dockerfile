@@ -26,4 +26,4 @@ COPY app/ app/
 COPY identity_policy.py disaster_recovery.py document_source.py reference_ranking.py reference_answer.py auth_oidc.py pdf_worker.py pdf_transport.py pdf_daemon.py production_admin.py production_store.py production_runtime.py query_intent.py rag_service.py ./
 USER 10001:10001
 EXPOSE 8000
-CMD ["uvicorn","app.api:app","--host","0.0.0.0","--port","8000","--workers","1","--lifespan","on","--no-proxy-headers","--no-access-log","--limit-concurrency","32","--timeout-keep-alive","5","--timeout-graceful-shutdown","20"]
+CMD ["uvicorn","app.api:app","--host","0.0.0.0","--port","8000","--workers","1","--http","h11","--lifespan","on","--no-proxy-headers","--no-access-log","--limit-concurrency","32","--timeout-keep-alive","5","--timeout-graceful-shutdown","20"]
