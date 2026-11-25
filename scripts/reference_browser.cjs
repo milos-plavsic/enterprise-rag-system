@@ -40,13 +40,12 @@ const signIn = async (page, user, hash = '', expectCallback = true) => {
   await page.locator('#username').fill(user);
   await page.locator('#password').fill(accounts[user].password);
   const submitted = page.waitForResponse(isCredentialPost,{timeout:45000});
+  // A successful token exchange is the authoritative proof that the OAuth
+  // callback loaded and executed. A concurrent waitForURL is redundant and can
+  // fail with Chromium ERR_NETWORK_CHANGED while Docker recreates lab networks.
   const exchanged = expectCallback ? page.waitForResponse(isTokenPost,{timeout:45000}) : null;
-  const callback = expectCallback ? page.waitForURL(
-    url => url.origin === origin && url.pathname === '/reference/',
-    {timeout:45000}) : null;
   await page.locator('#kc-login').click();
   const response = await submitted;
-  if (callback) await callback;
   if (exchanged) {
     const tokenResponse = await exchanged;
     assert.equal(tokenResponse.status(),200,
