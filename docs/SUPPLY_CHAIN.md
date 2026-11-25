@@ -4,28 +4,38 @@ This document records the candidate assessment and the evidence required before 
 new base image or vulnerability disposition can be accepted. It is not a
 production certification or release approval.
 
-## Current blocking findings (24 November 2026)
+## Current OpenSSL disposition (25 November 2026)
 
-The candidate scan in [run 45392902786](https://github.com/milos-plavsic/enterprise-rag-system/actions/runs/45392902786)
-found five distinct CVEs across Alpine libssl3 and libcrypto3 3.5.9-r1.
-The upstream [OpenSSL 3.5 advisories](https://openssl-library.org/news/vulnerabilities-3.5/)
-rate the issues low, while the container scan rates them high. Preserve the
-scanner severity until an independent product-specific assessment exists.
+The production candidate uses exact Alpine `libssl3=3.5.9-r1` and
+`libcrypto3=3.5.9-r1`. OpenSSL upstream rates the five remaining issues Low,
+while the distribution/scanner feed used by CI reports them High. OpenSSL fixes
+the 3.5 branch in 3.5.10; the evaluated Alpine v3.24 repository did not yet
+provide that package when checked on 25 November 2026.
 
-| CVE | Upstream affected functionality | Required product-specific evidence |
+The repository therefore uses product-specific reachability evidence rather than
+a broad CVE allowlist. The exact reviewed scope is stored in
+`security/openssl-3.5.9-r1-dispositions.json`. A disposition is accepted only
+for the exact CVE, package name, package version and APK package type, and only
+while every required runtime invariant is true.
+
+| CVE | Upstream affected path | Required runtime evidence |
 | --- | --- | --- |
-| CVE-2026-124709 | QUIC server stream resource retention | Inspect actual network protocols, native library users, ingress and any QUIC server entry points. |
-| CVE-2026-107494 | QUIC connection-ID frame queuing | Check both client and server use of native QUIC, including transitive dependencies. |
-| CVE-2026-121482 | CRL processing during X.509 verification, notably CMS/PKCS#7 | Inspect certificate verification flags, trust inputs and all CMS/PKCS#7 parsing paths. |
-| CVE-2026-84786 | DANE API in non-SMTP clients | Inspect native library consumers and any DANE configuration or direct calls. |
-| CVE-2026-107493 | PEM certificate parsing into an existing caller-supplied stack | Inspect Python SSL and native library call paths for the exact API preconditions and trust boundaries. |
+| CVE-2026-124709 | OpenSSL QUIC server rejected-stream handling | `no_quic_stack` |
+| CVE-2026-107494 | OpenSSL QUIC connection-ID processing | `no_quic_stack` |
+| CVE-2026-121482 | CMS/PKCS#7 verification with CRL checking | `no_cms_pkcs7_api`, `no_crl_check_configuration` |
+| CVE-2026-84786 | DANE/TLSA client validation | `no_dane_api` |
+| CVE-2026-107493 | PEM_X509_INFO parsing into an existing caller-supplied stack | `no_direct_pem_stack_api`, `python_tls_ca_loader_only` |
 
-All five are under investigation; none has a new release exception. The
-upstream fix target is 3.5.10. The public Alpine edge package index still
-reported 3.5.9-r1 when checked. A source patch is not evidence that a supported,
-signed distribution package has been released. Debian's tracker also reports
-unresolved findings for Trixie. Do not choose a base solely because its scanner
-reports fewer CVEs; corroborate the distribution advisory and actual runtime.
+`scripts/openssl_reachability.py` runs inside the final candidate with no
+network and a read-only filesystem. It verifies the explicit HTTP/1.1 `h11`
+transport, absence of QUIC/DANE/CMS/PKCS#7/direct native application paths,
+the final runtime's system-OpenSSL consumers, exact Alpine OpenSSL packages,
+and the SQLite runtime/CLI invariants. Any package, protocol, source or native
+consumer drift fails closed and requires a new review. A vendor-fixed package
+should replace these dispositions as soon as it is available and passes the
+same runtime tests.
+
+Reference: [OpenSSL 3.5 advisories](https://openssl-library.org/news/vulnerabilities-3.5/).
 
 ## Comparative evaluation
 
@@ -62,37 +72,41 @@ throughput separately; build and smoke duration are not serving benchmarks.
 Verify vendor provenance/signatures, license/entitlement and support lifetime.
 Only then change the production Dockerfile and repeat exact-tree CI.
 
-## OpenVEX investigation inventory
+## OCI identity, dual scanning and OpenVEX
 
-The production workflow generates an OpenVEX v0.2.0 inventory from the raw
-Grype JSON and checks its source image ID against the locally built OCI config
-digest. The raw report SHA-256 is recorded in each grouped finding. All
-generated statements are `under_investigation`. Empty findings are not a
-claim that a product is vulnerability-free. The inventory is retained before
-the release gate and is not consumed by the gate as an exception.
+The production workflow records Buildx metadata and validates it against the
+raw Grype report before vulnerability evidence is accepted.
+`scripts/image_identity.py` verifies the Buildx config digest, descriptor,
+Grype config digest, Grype embedded manifest bytes and manifest-to-config
+relationship. The validated local manifest digest becomes the candidate product
+identity; the Buildx manifest digest is retained separately because local
+Docker load/export can alter manifest representation while preserving the image
+config. A future registry publication must use and attest the registry digest;
+this workflow does not publish an image.
 
-See the [OpenVEX specification](https://github.com/openvex/spec/blob/main/OPENVEX-SPEC.md).
-A future reviewed disposition must bind the exact product digest, CVE,
-component identity, applicable version and scope to reproducible evidence.
-A non-applicability claim requires a valid VEX justification, call-path or
-component evidence, explicit review by someone independent of the author,
-and a defined revalidation trigger. Never infer non-applicability from
-application-language API names alone. No new automated allowlist is enabled.
+Grype is the primary scanner. Trivy 0.76.2 is a digest-pinned secondary scanner
+that scans a saved image archive without the Docker socket, source-tree mount,
+credentials or network access during the scan. Both raw reports are retained.
+`scripts/compare_image_scans.py` records discrepancies but cannot waive them.
 
-The existing narrowly documented SQLite CLI disposition is unchanged. The
-gate also rejects unknown severity and malformed severity labels. A second
-scanner, Trivy 0.76.2, is pinned to the vendor registry digest and scans a
-saved image archive without the Docker socket, repository mount, credentials
-or network access during the scan. Database acquisition is a separate step.
-The raw Trivy report and cross-scanner comparison are retained; both reports
-must refer to the same local image config digest and both policies must pass.
-The only matching disposition remains the exact SQLite CLI case. The release
-bundle includes both SPDX and CycloneDX inventories, hashes, and main-only
-build provenance. No registry push or signing is performed.
-Daily scheduled production assurance and manual dispatch are configured; GitHub
-runs the schedule on the default branch only. This rebuilds and rescans the
-source candidate, not a previously deployed registry digest. Existing
-Dependabot Docker and GitHub Actions monitoring remains in place.
+Two OpenVEX v0.2.0 documents are produced. The investigation document keeps
+blocking findings `under_investigation` and is deterministic over the
+candidate manifest, raw scan hash and generator hash. The reviewed release VEX
+is produced only when the exact source-controlled disposition scope and runtime
+evidence match. Both documents are validated using digest-pinned `vexctl` in
+strict mode. VEX validity alone is not sufficient: the release-policy evaluator
+must also report zero unresolved High, Critical or Unknown findings.
+
+The existing SQLite disposition remains exact: only
+`CVE-2026-119586` on Alpine `sqlite-libs` 3.54.1-r0 can be classified
+`not_affected`, and only while the final runtime proves SQLite >= 3.54.1 and
+the affected `sqlite3` CLI is absent.
+
+Daily scheduled production assurance and manual dispatch are configured on the
+default branch. The release bundle contains the raw scans, identity receipt,
+reachability evidence, investigation and release VEX documents, SPDX and
+CycloneDX inventories, checksums, and main-only build provenance. No registry
+push or deployment is performed.
 
 ## Release acceptance checklist
 
