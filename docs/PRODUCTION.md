@@ -72,9 +72,39 @@ Reference baselines for review include [OWASP ASVS](https://owasp.org/www-projec
 
 ## Image vulnerability disposition
 
-The image also requests the exact vendor-signed Alpine 3.24 `libcrypto3` and `libssl3` packages at 3.5.9-r1, retaining the digest-pinned Python base. This is the available vendor backport for CVE-2026-88823, CVE-2026-95691, CVE-2026-95692 and CVE-2026-107496. It is not a claim that all OpenSSL findings are resolved. The 24 November 2026 candidate scan also reported CVE-2026-124709, CVE-2026-107494, CVE-2026-121482, CVE-2026-84786 and CVE-2026-107493; packaging remains blocked if any high/critical finding remains, pending a verified fixed package or separately reviewed evidence. See [Alpine package index](https://pkgs.alpinelinux.org/packages?arch=x86_64&branch=v3.24&name=openssl&repo=main) and [OpenSSL advisories](https://openssl-library.org/news/vulnerabilities-3.5/).
+The production candidate retains the digest-pinned Python/Alpine base and
+installs exact vendor-signed Alpine `libcrypto3=3.5.9-r1` and
+`libssl3=3.5.9-r1`. Four earlier OpenSSL findings are fixed by that revision.
+Five scanner findings remain for OpenSSL 3.5.9. Their product-specific
+classification is governed by
+[SUPPLY_CHAIN.md](SUPPLY_CHAIN.md) and
+`security/openssl-3.5.9-r1-dispositions.json`, not by a generic CVE allowlist.
 
+For those five findings, release requires runtime evidence from the final image
+showing that the exact vulnerable execution preconditions are absent. The
+evidence checks the pinned HTTP/1.1 transport, QUIC, DANE, CMS/PKCS#7, CRL and
+direct PEM/native call paths, native consumers of system OpenSSL, exact package
+versions and related runtime invariants. Any package, source, protocol or native
+consumer drift invalidates the disposition and blocks packaging. Both Grype and
+Trivy findings are evaluated; scanner disagreement is retained as evidence and
+never acts as an exception. The resulting investigation and reviewed release
+OpenVEX documents must both pass strict `vexctl` validation.
 
-The production image updates Alpine `zlib` and `krb5-libs` to the vendor fixed packages. It temporarily uses the checksum-pinned, signed Alpine `sqlite-libs` 3.54.1-r0 from the Alpine edge package repository because 3.24 still ships 3.53.4. No edge package repository is enabled in the image. Revisit the one package override when 3.24 provides a stable patched library. The [SQLite release history](https://www.sqlite.org/changes.html) and [Debian maintainer record](https://bugs.debian.org/1152790) document the upstream 3.54 library fixes.
+The production image also updates Alpine `zlib` and `krb5-libs` to vendor
+fixed packages. It temporarily uses the checksum-pinned, signed Alpine
+`sqlite-libs` 3.54.1-r0 package from the Alpine edge package repository
+because the evaluated 3.24 base still ships an older SQLite library. No edge
+repository is enabled in the runtime image.
 
-The sole exact-match disposition in the high/critical scan gate is `CVE-2026-119586` on Alpine `sqlite-libs` 3.54.1-r0. The advisory describes the `sqlite3` command-line shell's `.recover` command, which is absent from this image. No application or restore command shells out to `sqlite3`. CI checks the actual runtime library and CLI absence before packaging. The raw report is retained even when the gate fails. A match on another package, version or advisory is not waived. See the [vendor advisory](https://bugzilla.redhat.com/show_bug.cgi?id=CVE-2026-119586).
+The exact SQLite disposition applies only to `CVE-2026-119586` on Alpine
+`sqlite-libs` 3.54.1-r0 and only while CI proves that the runtime library is
+at least 3.54.1 and the affected `sqlite3` command-line shell is absent. No
+application or restore path shells out to `sqlite3`. A finding on another
+package, version, package type or advisory is not inherited by this
+disposition.
+
+The raw scanner reports, immutable image identity receipt, reachability
+evidence, VEX documents, SPDX and CycloneDX SBOMs and checksums are retained in
+the candidate artifact. The main-only provenance step runs only after the full
+production image job succeeds. The workflow does not publish or deploy the
+image.
