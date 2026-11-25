@@ -33,6 +33,7 @@ def evidence():
             "no_cms_pkcs7_api": True,
             "no_crl_check_configuration": True,
             "no_direct_pem_stack_api": True,
+            "no_suite_b_certificate_flag": True,
             "python_tls_ca_loader_only": True,
             "sqlite_cli_absent": True,
             "sqlite_runtime_patched": True,
@@ -61,7 +62,7 @@ def policy():
             "type": "apk",
         },
         "dispositions": {
-            "CVE-2026-124709": disposition(["no_quic_stack"]),
+            "CVE-2026-84785": disposition(["no_quic_stack"]),
             "CVE-2026-107494": disposition(["no_quic_stack"]),
             "CVE-2026-121482": disposition(
                 ["no_cms_pkcs7_api", "no_crl_check_configuration"]
@@ -70,6 +71,8 @@ def policy():
             "CVE-2026-107493": disposition(
                 ["no_direct_pem_stack_api", "python_tls_ca_loader_only"]
             ),
+            "CVE-2026-124709": disposition(["no_quic_stack"]),
+            "CVE-2026-35190": disposition(["no_suite_b_certificate_flag"]),
         },
     }
 
@@ -210,7 +213,7 @@ def test_release_vex_is_manifest_bound_and_stable():
     )
     assert first == second
     assert first["author"] == "https://github.com/milos-plavsic"
-    assert len(first["statements"]) == 5
+    assert len(first["statements"]) == 7
     assert all(row["status"] == "not_affected" for row in first["statements"])
     assert all(
         row["justification"] == "vulnerable_code_not_in_execute_path"
