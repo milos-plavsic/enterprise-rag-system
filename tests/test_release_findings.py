@@ -8,13 +8,17 @@ from scripts.evaluate_release_findings import evaluate, release_vex
 
 CONFIG = "sha256:" + "a" * 64
 MANIFEST = "sha256:" + "b" * 64
+GENERATOR = "sha256:" + "e" * 64
 
 
 def identity():
     return {
         "config_digest": CONFIG,
         "manifest_digest": MANIFEST,
-        "product_id": "https://github.com/milos-plavsic/enterprise-rag-system/container-images/sha256/" + "b" * 64,
+        "product_id": (
+            "https://github.com/milos-plavsic/enterprise-rag-system/"
+            "container-images/sha256/" + "b" * 64
+        ),
     }
 
 
@@ -36,6 +40,15 @@ def evidence():
     }
 
 
+def disposition(required):
+    return {
+        "status": "not_affected",
+        "justification": "vulnerable_code_not_in_execute_path",
+        "required_invariants": required,
+        "impact_statement": "Reviewed vulnerable execution path is absent.",
+    }
+
+
 def policy():
     return {
         "schema": 1,
@@ -48,27 +61,38 @@ def policy():
             "type": "apk",
         },
         "dispositions": {
-            "CVE-2026-124709": {
-                "status": "not_affected",
-                "justification": "vulnerable_code_not_in_execute_path",
-                "required_invariants": ["no_quic_stack"],
-                "impact_statement": "No QUIC execute path.",
-            }
+            "CVE-2026-124709": disposition(["no_quic_stack"]),
+            "CVE-2026-107494": disposition(["no_quic_stack"]),
+            "CVE-2026-121482": disposition(
+                ["no_cms_pkcs7_api", "no_crl_check_configuration"]
+            ),
+            "CVE-2026-84786": disposition(["no_dane_api"]),
+            "CVE-2026-107493": disposition(
+                ["no_direct_pem_stack_api", "python_tls_ca_loader_only"]
+            ),
         },
     }
 
 
 def grype(*rows):
     return {
-        "source": {"type": "image", "target": {"imageID": CONFIG, "manifestDigest": MANIFEST}},
+        "source": {
+            "type": "image",
+            "target": {"imageID": CONFIG, "manifestDigest": MANIFEST},
+        },
         "matches": list(rows),
     }
 
 
-def gmatch(ident="CVE-2026-124709", package="libssl3", version="3.5.9-r1", severity="High"):
+def gmatch(ident="CVE-2026-124709", package="libssl3",
+           version="3.5.9-r1", severity="High", package_type="apk"):
     return {
         "vulnerability": {"id": ident, "severity": severity},
-        "artifact": {"name": package, "version": version, "type": "apk"},
+        "artifact": {
+            "name": package,
+            "version": version,
+            "type": package_type,
+        },
     }
 
 
@@ -76,11 +100,16 @@ def trivy(*rows):
     return {
         "ArtifactType": "container_image",
         "Metadata": {"ImageID": CONFIG},
-        "Results": [{"Class": "os-pkgs", "Type": "alpine", "Vulnerabilities": list(rows)}],
+        "Results": [{
+            "Class": "os-pkgs",
+            "Type": "alpine",
+            "Vulnerabilities": list(rows),
+        }],
     }
 
 
-def tmatch(ident="CVE-2026-124709", package="libcrypto3", version="3.5.9-r1", severity="HIGH"):
+def tmatch(ident="CVE-2026-124709", package="libcrypto3",
+           version="3.5.9-r1", severity="HIGH"):
     return {
         "VulnerabilityID": ident,
         "PkgName": package,
@@ -90,7 +119,9 @@ def tmatch(ident="CVE-2026-124709", package="libcrypto3", version="3.5.9-r1", se
 
 
 def test_exact_evidence_resolves_both_scanners():
-    result = evaluate(grype(gmatch()), trivy(tmatch()), evidence(), policy(), identity())
+    result = evaluate(
+        grype(gmatch()), trivy(tmatch()), evidence(), policy(), identity()
+    )
     assert not result["unresolved"]
     assert {row["scanner"] for row in result["resolved"]} == {"grype", "trivy"}
 
@@ -102,6 +133,7 @@ def test_sqlite_disposition_requires_runtime_invariants():
         evidence(), policy(), identity(),
     )
     assert not result["unresolved"]
+
     broken = evidence()
     broken["invariants"]["sqlite_cli_absent"] = False
     result = evaluate(
@@ -127,6 +159,17 @@ def test_scope_drift_fails_closed(change):
     assert result["unresolved"]
 
 
+@pytest.mark.parametrize("mutation", ["missing", "extra"])
+def test_disposition_set_cannot_be_extended_or_reduced_in_json_only(mutation):
+    scoped = policy()
+    if mutation == "missing":
+        scoped["dispositions"].pop("CVE-2026-124709")
+    else:
+        scoped["dispositions"]["CVE-2099-9999"] = disposition(["no_quic_stack"])
+    with pytest.raises(ValueError, match="independently reviewed CVEs"):
+        evaluate(grype(gmatch()), trivy(tmatch()), evidence(), scoped, identity())
+
+
 def test_required_invariant_failure_rejects_disposition():
     broken = evidence()
     broken["invariants"]["no_quic_stack"] = False
@@ -135,30 +178,64 @@ def test_required_invariant_failure_rejects_disposition():
 
 
 def test_scanner_identity_drift_rejected():
-    g = grype(gmatch())
-    g["source"]["target"]["manifestDigest"] = "sha256:" + "d" * 64
+    report = grype(gmatch())
+    report["source"]["target"]["manifestDigest"] = "sha256:" + "d" * 64
     with pytest.raises(ValueError, match="manifest mismatch"):
-        evaluate(g, trivy(tmatch()), evidence(), policy(), identity())
+        evaluate(report, trivy(tmatch()), evidence(), policy(), identity())
+
+
+def test_runtime_source_digest_is_mandatory():
+    broken = evidence()
+    broken["source_tree_sha256"] = "not-a-digest"
+    with pytest.raises(ValueError, match="source digest"):
+        evaluate(grype(gmatch()), trivy(tmatch()), broken, policy(), identity())
 
 
 def test_release_vex_is_manifest_bound_and_stable():
-    p, e, i = policy(), evidence(), identity()
-    raw = json.dumps(p, sort_keys=True).encode()
+    current_policy = policy()
+    current_evidence = evidence()
+    current_identity = identity()
+    raw = json.dumps(current_policy, sort_keys=True).encode()
     digest = "sha256:" + hashlib.sha256(raw).hexdigest()
-    first = release_vex(p, e, i, digest)
-    second = release_vex(copy.deepcopy(p), copy.deepcopy(e), copy.deepcopy(i), digest)
+
+    first = release_vex(
+        current_policy, current_evidence, current_identity, digest, GENERATOR
+    )
+    second = release_vex(
+        copy.deepcopy(current_policy),
+        copy.deepcopy(current_evidence),
+        copy.deepcopy(current_identity),
+        digest,
+        GENERATOR,
+    )
     assert first == second
     assert first["author"] == "https://github.com/milos-plavsic"
-    assert first["statements"][0]["status"] == "not_affected"
-    assert first["statements"][0]["justification"] == "vulnerable_code_not_in_execute_path"
-    assert first["statements"][0]["products"][0]["hashes"]["sha-256"] == "b" * 64
-    assert first["statements"][0]["products"][0]["subcomponents"][0]["@id"].startswith("pkg:apk/alpine/")
+    assert len(first["statements"]) == 5
+    assert all(row["status"] == "not_affected" for row in first["statements"])
+    assert all(
+        row["justification"] == "vulnerable_code_not_in_execute_path"
+        for row in first["statements"]
+    )
+    product = first["statements"][0]["products"][0]
+    assert product["hashes"]["sha-256"] == "b" * 64
+    assert all(
+        component["@id"].startswith("pkg:apk/alpine/")
+        for component in product["subcomponents"]
+    )
 
 
 def test_release_vex_generator_change_changes_document_id():
-    p, e, i = policy(), evidence(), identity()
+    current_policy = policy()
+    current_evidence = evidence()
+    current_identity = identity()
     digest = "sha256:" + "f" * 64
-    first = release_vex(p, e, i, digest, "sha256:" + "1" * 64)
-    second = release_vex(p, e, i, digest, "sha256:" + "2" * 64)
+    first = release_vex(
+        current_policy, current_evidence, current_identity,
+        digest, "sha256:" + "1" * 64,
+    )
+    second = release_vex(
+        current_policy, current_evidence, current_identity,
+        digest, "sha256:" + "2" * 64,
+    )
     assert first["@id"] != second["@id"]
     assert first["tooling"] != second["tooling"]
