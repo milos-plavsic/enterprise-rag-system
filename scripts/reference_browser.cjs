@@ -27,6 +27,9 @@ const isIdpAuth = url => url.origin === idpOrigin &&
 const isCredentialPost = response => response.request().method() === 'POST' &&
   new URL(response.url()).origin === idpOrigin &&
   new URL(response.url()).pathname.includes('/login-actions/authenticate');
+const isTokenPost = response => response.request().method() === 'POST' &&
+  new URL(response.url()).origin === idpOrigin &&
+  new URL(response.url()).pathname === idpRealm + '/protocol/openid-connect/token';
 const signIn = async (page, user, hash = '', expectCallback = true) => {
   await page.goto(`${origin}/reference/${hash}`,
     {waitUntil:'domcontentloaded',timeout:45000});
@@ -37,12 +40,19 @@ const signIn = async (page, user, hash = '', expectCallback = true) => {
   await page.locator('#username').fill(user);
   await page.locator('#password').fill(accounts[user].password);
   const submitted = page.waitForResponse(isCredentialPost,{timeout:45000});
+  const exchanged = expectCallback ? page.waitForResponse(isTokenPost,{timeout:45000}) : null;
   const callback = expectCallback ? page.waitForURL(
     url => url.origin === origin && url.pathname === '/reference/',
     {timeout:45000}) : null;
   await page.locator('#kc-login').click();
   const response = await submitted;
   if (callback) await callback;
+  if (exchanged) {
+    const tokenResponse = await exchanged;
+    assert.equal(tokenResponse.status(),200,
+      `token endpoint returned ${tokenResponse.status()}`);
+    await page.getByText('Signed in.',{exact:true}).waitFor({timeout:15000});
+  }
   return response;
 };
 const citationUrl = hash => origin + hash.slice(1);
@@ -98,18 +108,8 @@ async function waitForPublishedSigningKey(kid, timeoutMs = 30000) {
   throw Error('Rotated signing key was not published in the trusted JWKS within 30 seconds.');
 }
 async function expectRotatedSignIn(page) {
-  const token = page.waitForResponse(response => {
-    const url = new URL(response.url());
-    return response.request().method() === 'POST' &&
-      url.origin === idpOrigin &&
-      url.pathname === idpRealm + '/protocol/openid-connect/token';
-  },{timeout:45000});
   try {
     await signIn(page,'avery');
-    const tokenResponse = await token;
-    assert.equal(tokenResponse.status(),200,
-      `rotated-key token endpoint returned ${tokenResponse.status()}`);
-    await page.getByText('Signed in.',{exact:true}).waitFor({timeout:15000});
   } catch (error) {
     const failed = await page.getByText(
       'Sign-in could not be verified. Start again.',{exact:true}).isVisible();
