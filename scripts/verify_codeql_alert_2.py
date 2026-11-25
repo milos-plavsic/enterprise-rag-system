@@ -82,7 +82,7 @@ def verify(alert: object, instances: object, pull: object, merge_sha: str) -> No
         raise VerificationError("Original alert source path mismatch")
     if not isinstance(pull, dict) or pull.get("number") != PR_NUMBER:
         raise VerificationError("Wrong pull request")
-    if (pull.get("merge_commit_sha") != merge_sha
+    if (pull.get("merge_commit_sha") not in (None, merge_sha)
             or pull.get("state") != "open"
             or (pull.get("base") or {}).get("ref") != "main"):
         raise VerificationError(
@@ -104,10 +104,28 @@ def verify(alert: object, instances: object, pull: object, merge_sha: str) -> No
         raise VerificationError("CodeQL instance commit does not match merge SHA")
 
 
+def verify_merge_ancestry(pull: object, commit: object, merge_sha: str) -> None:
+    """Bind the checked-out merge tree to the latest base and head commits."""
+    if not isinstance(pull, dict) or not isinstance(commit, dict):
+        raise VerificationError("Missing PR or merge commit ancestry")
+    base, head = pull.get("base"), pull.get("head")
+    if not isinstance(base, dict) or not isinstance(head, dict):
+        raise VerificationError("PR base/head metadata incomplete")
+    expected = [base.get("sha"), head.get("sha")]
+    parents = commit.get("parents")
+    if (not all(isinstance(value, str) and len(value) == 40 for value in expected)
+            or commit.get("sha") != merge_sha
+            or not isinstance(parents, list)
+            or [p.get("sha") if isinstance(p, dict) else None for p in parents] != expected):
+        raise VerificationError("Checked-out merge commit is not current PR base+head merge")
+
+
 def check(token: str, merge_sha: str) -> None:
     base = f"/repos/{REPO}"
     alert = api_get(base + f"/code-scanning/alerts/{ALERT_NUMBER}", token)
     pull = api_get(base + f"/pulls/{PR_NUMBER}", token)
+    merge = api_get(base + f"/git/commits/{merge_sha}", token)
+    verify_merge_ancestry(pull, merge, merge_sha)
     params = urllib.parse.urlencode(
         {"ref": f"refs/pull/{PR_NUMBER}/merge", "per_page": 100}
     )

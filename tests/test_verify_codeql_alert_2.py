@@ -6,6 +6,10 @@ from scripts import verify_codeql_alert_2 as q
 SHA = "a" * 40
 
 
+def merge_fixture():
+    return {"sha": SHA, "parents": [{"sha": "b" * 40}, {"sha": "c" * 40}]}
+
+
 def fixture():
     return (
         {"number": 2, "tool": {"name": "CodeQL"}, "state": "open",
@@ -13,7 +17,7 @@ def fixture():
          "most_recent_instance": {"location": {"path": "scripts/smoke_idp.py"}}},
         [{"ref": "refs/pull/10/merge", "state": "fixed", "commit_sha": SHA}],
         {"number": 10, "merge_commit_sha": SHA, "state": "open",
-         "base": {"ref": "main"}},
+         "base": {"ref": "main", "sha": "b" * 40}, "head": {"sha": "c" * 40}},
     )
 
 
@@ -99,7 +103,7 @@ class TestCodeQLProof(TestCase):
 
     def test_retry_only_eventual_consistency(self):
         a, rows, p = fixture()
-        with mock.patch.object(q, "api_get", side_effect=[a, p, [], rows]), \
+        with mock.patch.object(q, "api_get", side_effect=[a, p, merge_fixture(), [], rows]), \
              mock.patch.object(q.time, "sleep") as sleep:
             q.check("fake", SHA)
             sleep.assert_called_once_with(q.DELAY_SECONDS)
@@ -116,7 +120,7 @@ class TestCodeQLProof(TestCase):
     def test_incomplete_pagination(self):
         a, rows, p = fixture()
         with mock.patch.object(q, "api_get",
-                               side_effect=[a, p, rows * 100]):
+                               side_effect=[a, p, merge_fixture(), rows * 100]):
             with self.assertRaises(q.VerificationError):
                 q.check("fake", SHA)
 
@@ -130,7 +134,7 @@ class TestCodeQLProof(TestCase):
 
     def test_checkout_merge_commit_used(self):
         with mock.patch.object(q.subprocess, "run") as runner:
-            runner.return_value.stdout = SHA + "\\n"
+            runner.return_value.stdout = SHA + chr(10)
             self.assertEqual(q.checked_out_merge_sha(), SHA)
             runner.assert_called_once()
 
@@ -139,3 +143,23 @@ class TestCodeQLProof(TestCase):
             runner.return_value.stdout = "invalid-sha"
             with self.assertRaises(q.VerificationError):
                 q.checked_out_merge_sha()
+
+    def test_null_api_merge_with_valid_ancestry(self):
+        alert, rows, pull = fixture()
+        pull["merge_commit_sha"] = None
+        q.verify(alert, rows, pull, SHA)
+        q.verify_merge_ancestry(pull, merge_fixture(), SHA)
+
+    def test_merge_parent_mismatch_rejected(self):
+        _, _, pull = fixture()
+        merge = merge_fixture()
+        merge["parents"][1]["sha"] = "f" * 40
+        with self.assertRaises(q.VerificationError):
+            q.verify_merge_ancestry(pull, merge, SHA)
+
+    def test_wrong_merge_object_sha_rejected(self):
+        _, _, pull = fixture()
+        merge = merge_fixture()
+        merge["sha"] = "f" * 40
+        with self.assertRaises(q.VerificationError):
+            q.verify_merge_ancestry(pull, merge, SHA)
