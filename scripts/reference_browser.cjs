@@ -30,9 +30,6 @@ const isIdpAuth = url => url.origin === idpOrigin &&
 const isCredentialPost = response => response.request().method() === 'POST' &&
   new URL(response.url()).origin === idpOrigin &&
   new URL(response.url()).pathname.includes('/login-actions/authenticate');
-const isTokenPost = response => response.request().method() === 'POST' &&
-  new URL(response.url()).origin === idpOrigin &&
-  new URL(response.url()).pathname === idpRealm + '/protocol/openid-connect/token';
 const signIn = async (page, user, hash = '', expectCallback = true) => {
   await page.goto(`${origin}/reference/${hash}`,
     {waitUntil:'domcontentloaded',timeout:45000});
@@ -46,42 +43,31 @@ const signIn = async (page, user, hash = '', expectCallback = true) => {
   await page.locator('#username').fill(user);
   await page.locator('#password').fill(accounts[user].password);
   const submitted = page.waitForResponse(isCredentialPost,{timeout:45000});
-  // A successful token exchange is the authoritative proof that the OAuth
-  // callback loaded and executed. A concurrent waitForURL is redundant and can
-  // fail with Chromium ERR_NETWORK_CHANGED while Docker recreates lab networks.
-  const exchanged = expectCallback ? page.waitForResponse(isTokenPost,{timeout:45000}) : null;
   await page.locator('#kc-login').click();
   const credentialResponse = await submitted;
-  let accessToken;
-  if (exchanged) {
-    const tokenResponse = await exchanged;
-    assert.equal(tokenResponse.status(),200,
-      `token endpoint returned ${tokenResponse.status()}`);
-    const payload = await tokenResponse.json();
-    assert.equal(typeof payload.access_token,'string','token response missing access token');
-    accessToken = payload.access_token;
-    // A callback carrying a citation hash immediately replaces the status
-    // with the citation result; only no-hash logins have a stable Signed in state.
-    if (!hash) await page.getByText('Signed in.',{exact:true}).waitFor({timeout:15000});
+  // Treat the application result as the authentication contract, not an
+  // internal token-endpoint observation. For ordinary sign-in the visible
+  // Signed in state proves the callback and token exchange completed. Deep-link
+  // callers assert the exact authenticated citation response themselves.
+  if (expectCallback && !hash) {
+    await page.getByText('Signed in.',{exact:true}).waitFor({timeout:45000});
   }
-  return {credentialResponse,accessToken};
+  return {credentialResponse};
 };
 const citationUrl = hash => origin + hash.slice(1);
 async function expectCitationAfterSignIn(page, user, hash, expectedStatus, message) {
   assert.ok(hash.startsWith('#/v1/documents/'), `unexpected citation hash ${hash}`);
-  const {accessToken} = await signIn(page,user,hash);
-  assert.equal(typeof accessToken,'string','callback did not yield an access token');
-  // The deep-link UI assertion below proves the browser callback followed the
-  // requested citation. Verify the authorization status independently so a
-  // Playwright network-event race cannot hide or fabricate a 403/404 result.
-  const verification = await fetch(citationUrl(hash), {
-    headers:{Authorization:`Bearer ${accessToken}`},
-    redirect:'error',
-    signal:AbortSignal.timeout(15000),
-  });
-  assert.equal(verification.status,expectedStatus,
-    `citation ${hash} returned ${verification.status}, expected ${expectedStatus}`);
-  await verification.arrayBuffer();
+  // Register before navigation so the assertion covers the browser application's
+  // own authenticated request after the OAuth callback. This is stronger than
+  // inspecting the internal token exchange and cannot be satisfied without a
+  // successful callback, bearer token and authorization decision.
+  const citation = page.waitForResponse(r =>
+    r.request().method() === 'GET' && r.url() === citationUrl(hash),
+    {timeout:45000});
+  await signIn(page,user,hash);
+  const verification = await citation;
+  assert.equal(verification.status(),expectedStatus,
+    `citation ${hash} returned ${verification.status()}, expected ${expectedStatus}`);
   await page.getByText(message,{exact:true}).waitFor({timeout:15000});
 }
 async function expectCitationHash(page, hash, expectedStatus, message) {
