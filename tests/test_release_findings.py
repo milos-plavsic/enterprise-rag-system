@@ -169,7 +169,7 @@ def test_disposition_set_cannot_be_extended_or_reduced_in_json_only(mutation):
         scoped["dispositions"].pop("CVE-2026-124709")
     else:
         scoped["dispositions"]["CVE-2099-9999"] = disposition(["no_quic_stack"])
-    with pytest.raises(ValueError, match="independently reviewed CVEs"):
+    with pytest.raises(ValueError, match="explicit reviewed CVE scope"):
         evaluate(grype(gmatch()), trivy(tmatch()), evidence(), scoped, identity())
 
 
