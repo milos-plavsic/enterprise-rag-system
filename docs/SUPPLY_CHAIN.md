@@ -7,7 +7,7 @@ production certification or release approval.
 ## Current OpenSSL disposition (25 November 2026)
 
 The production candidate uses exact Alpine `libssl3=3.5.9-r1` and
-`libcrypto3=3.5.9-r1`. OpenSSL upstream rates the five remaining issues Low,
+`libcrypto3=3.5.9-r1`. OpenSSL upstream rates the seven reviewed 17/24 November advisories Low,
 while the distribution/scanner feed used by CI reports them High. OpenSSL fixes
 the 3.5 branch in 3.5.10; the evaluated Alpine v3.24 repository did not yet
 provide that package when checked on 25 November 2026.
@@ -20,15 +20,17 @@ while every required runtime invariant is true.
 
 | CVE | Upstream affected path | Required runtime evidence |
 | --- | --- | --- |
-| CVE-2026-124709 | OpenSSL QUIC server rejected-stream handling | `no_quic_stack` |
+| CVE-2026-84785 | OpenSSL QUIC out-of-order stream fragment reassembly | `no_quic_stack` |
 | CVE-2026-107494 | OpenSSL QUIC connection-ID processing | `no_quic_stack` |
 | CVE-2026-121482 | CMS/PKCS#7 verification with CRL checking | `no_cms_pkcs7_api`, `no_crl_check_configuration` |
 | CVE-2026-84786 | DANE/TLSA client validation | `no_dane_api` |
 | CVE-2026-107493 | PEM_X509_INFO parsing into an existing caller-supplied stack | `no_direct_pem_stack_api`, `python_tls_ca_loader_only` |
+| CVE-2026-124709 | OpenSSL QUIC server rejected-stream handling | `no_quic_stack` |
+| CVE-2026-35190 | TLS 1.3 server key-share processing with the Suite B certificate flag | `no_suite_b_certificate_flag` |
 
 `scripts/openssl_reachability.py` runs inside the final candidate with no
 network and a read-only filesystem. It verifies the explicit HTTP/1.1 `h11`
-transport, absence of QUIC/DANE/CMS/PKCS#7/direct native application paths,
+transport, absence of QUIC/DANE/CMS/PKCS#7/Suite-B/direct native application paths,
 the final runtime's system-OpenSSL consumers, exact Alpine OpenSSL packages,
 and the SQLite runtime/CLI invariants. Any package, protocol, source or native
 consumer drift fails closed and requires a new review. A vendor-fixed package
