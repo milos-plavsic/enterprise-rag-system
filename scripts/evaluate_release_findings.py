@@ -160,8 +160,8 @@ def evaluate(grype: dict, trivy: dict, evidence: dict, policy: dict, identity: d
 
 
 def release_vex(policy: dict, evidence: dict, identity: dict, policy_sha256: str, generator_sha256: str) -> dict:
-    if not DIGEST.fullmatch(policy_sha256):
-        raise ValueError("invalid policy digest")
+    if not DIGEST.fullmatch(policy_sha256) or not DIGEST.fullmatch(generator_sha256):
+        raise ValueError("invalid policy or generator digest")
     dispositions, packages = _policy(policy, evidence)
     manifest = identity["manifest_digest"]
     product = {
@@ -181,6 +181,7 @@ def release_vex(policy: dict, evidence: dict, identity: dict, policy_sha256: str
         manifest,
         policy_sha256,
         evidence["source_tree_sha256"],
+        generator_sha256,
     ]).encode()
     doc_hash = hashlib.sha256(stable).hexdigest()
     timestamp = policy.get("issued_at")
@@ -237,7 +238,14 @@ def main() -> int:
     identity = json.loads(args.identity.read_bytes())
     decisions = evaluate(grype, trivy, evidence, policy, identity)
     args.decisions.write_text(json.dumps(decisions, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    generator_sha256 = "sha256:" + hashlib.sha256(Path(__file__).read_bytes()).hexdigest()\n    vex = release_vex(\n        policy, evidence, identity,\n        "sha256:" + hashlib.sha256(policy_raw).hexdigest(),\n        generator_sha256,\n    )
+    generator_sha256 = "sha256:" + hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    vex = release_vex(
+        policy,
+        evidence,
+        identity,
+        "sha256:" + hashlib.sha256(policy_raw).hexdigest(),
+        generator_sha256,
+    )
     args.vex.write_text(json.dumps(vex, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     for row in decisions["unresolved"]:
         print(json.dumps(row, sort_keys=True))
