@@ -153,3 +153,12 @@ def test_release_vex_is_manifest_bound_and_stable():
     assert first["statements"][0]["justification"] == "vulnerable_code_not_in_execute_path"
     assert first["statements"][0]["products"][0]["hashes"]["sha-256"] == "b" * 64
     assert first["statements"][0]["products"][0]["subcomponents"][0]["@id"].startswith("pkg:apk/alpine/")
+
+
+def test_release_vex_generator_change_changes_document_id():
+    p, e, i = policy(), evidence(), identity()
+    digest = "sha256:" + "f" * 64
+    first = release_vex(p, e, i, digest, "sha256:" + "1" * 64)
+    second = release_vex(p, e, i, digest, "sha256:" + "2" * 64)
+    assert first["@id"] != second["@id"]
+    assert first["tooling"] != second["tooling"]
