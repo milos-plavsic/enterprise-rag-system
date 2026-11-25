@@ -65,14 +65,28 @@ jobs:
         run: >-
           python3 scripts/openvex_inventory.py rag-grype.json rag-image-identity.json
           rag-investigation.openvex.json
-      - name: Strictly validate OpenVEX v0.2.0
+      - name: Fetch immutable official OpenVEX v0.2.0 schema
         run: |
-          validator=ghcr.io/openvex/vexctl:v0.4.4@sha256:ce15c9c85ffc66cb630c0ce9c50a85e9241be77ca4e6e841ab14a0bf2a96bf7e
-          docker pull "$validator"
-          docker run --rm --network none --read-only --cap-drop ALL \
-            --security-opt no-new-privileges:true --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
+          set -euo pipefail
+          spec=7667061835da09300f913e26be10ee03c05e784d
+          git init -q "$RUNNER_TEMP/openvex-spec"
+          git -C "$RUNNER_TEMP/openvex-spec" remote add origin https://github.com/openvex/spec.git
+          git -C "$RUNNER_TEMP/openvex-spec" fetch -q --depth=1 origin "$spec"
+          test "$(git -C "$RUNNER_TEMP/openvex-spec" rev-parse FETCH_HEAD)" = "$spec"
+          git -C "$RUNNER_TEMP/openvex-spec" show FETCH_HEAD:openvex_json_schema.json > openvex-0.2.0.schema.json
+      - name: Validate investigation VEX against official OpenVEX v0.2.0 schema
+        run: |
+          validator=ghcr.io/sourcemeta/jsonschema:v17.2.1@sha256:7f91686a3a13acf1306e4924b9e1c1d4a672a40846bf00fbd6a6630d282628f7
+          docker pull --platform linux/amd64 "$validator"
+          common=(--rm --platform linux/amd64 --network none --read-only --cap-drop ALL
+            --security-opt no-new-privileges:true --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m)
+          docker run "${common[@]}" \
+            --mount "type=bind,src=$PWD/openvex-0.2.0.schema.json,dst=/schema.json,readonly" \
+            "$validator" metaschema /schema.json
+          docker run "${common[@]}" \
+            --mount "type=bind,src=$PWD/openvex-0.2.0.schema.json,dst=/schema.json,readonly" \
             --mount "type=bind,src=$PWD/rag-investigation.openvex.json,dst=/vex.json,readonly" \
-            "$validator" validate --strict /vex.json
+            "$validator" validate --format-assertion /schema.json /vex.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: rag-vex-investigation-${{ github.sha }}
@@ -107,17 +121,19 @@ jobs:
           rag-grype.json rag-trivy.json rag-openssl-evidence.json
           security/openssl-3.5.9-r1-dispositions.json rag-image-identity.json
           rag-release-decisions.json rag-release.openvex.json
-      - name: Strictly validate reviewed release OpenVEX
+      - name: Validate reviewed release OpenVEX against official schema
         id: validate_release_vex
         if: always() && (steps.release_policy.outcome == 'success' || steps.release_policy.outcome == 'failure')
         continue-on-error: true
         run: |
-          validator=ghcr.io/openvex/vexctl:v0.4.4@sha256:ce15c9c85ffc66cb630c0ce9c50a85e9241be77ca4e6e841ab14a0bf2a96bf7e
+          validator=ghcr.io/sourcemeta/jsonschema:v17.2.1@sha256:7f91686a3a13acf1306e4924b9e1c1d4a672a40846bf00fbd6a6630d282628f7
           test -s rag-release.openvex.json
-          docker run --rm --network none --read-only --cap-drop ALL \
+          test -s openvex-0.2.0.schema.json
+          docker run --rm --platform linux/amd64 --network none --read-only --cap-drop ALL \
             --security-opt no-new-privileges:true --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
+            --mount "type=bind,src=$PWD/openvex-0.2.0.schema.json,dst=/schema.json,readonly" \
             --mount "type=bind,src=$PWD/rag-release.openvex.json,dst=/vex.json,readonly" \
-            "$validator" validate --strict /vex.json
+            "$validator" validate --format-assertion /schema.json /vex.json
       - name: Preserve release disposition evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
