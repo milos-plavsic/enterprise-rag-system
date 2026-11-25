@@ -167,14 +167,46 @@ async function waitForIssuedSigningKey(kid, timeoutMs = 30000) {
   throw Error(`Rotated signing key did not issue a probe token within 30 seconds (last status: ${lastStatus}).`);
 }
 async function expectRotatedSignIn(page) {
+  // Record status codes, route paths and error categories only. Never log OAuth
+  // query strings, authorization codes, bearer tokens or request/response bodies.
+  const observed = [];
+  const record = value => { observed.push(value); if (observed.length > 12) observed.shift(); };
+  const onResponse = response => {
+    const url = new URL(response.url());
+    const auth = url.origin === idpOrigin &&
+      url.pathname.startsWith(idpRealm + '/protocol/openid-connect/');
+    const app = url.origin === origin && url.pathname === '/reference/';
+    if (auth || app) record({kind:'response',path:url.pathname,status:response.status()});
+  };
+  const onFailure = request => {
+    const url = new URL(request.url());
+    if (url.origin !== origin && url.origin !== idpOrigin) return;
+    const failure = request.failure()?.errorText || '';
+    const category = /ERR_[A-Z_]+/.exec(failure)?.[0] || 'network-error';
+    record({kind:'network',path:url.pathname,category});
+  };
+  const onPageError = error => record({kind:'page-error',name:error.name});
+  page.on('response',onResponse);
+  page.on('requestfailed',onFailure);
+  page.on('pageerror',onPageError);
   try {
     await signIn(page,'avery');
   } catch (error) {
-    const failed = await page.getByText(
-      'Sign-in could not be verified. Start again.',{exact:true}).isVisible();
-    throw Error(
-      `Post-rollover sign-in failed (callback failure: ${failed}; phase: ${page.url().startsWith(idpOrigin) ? 'identity-provider' : 'application'}).`,
-      {cause:error});
+    const status = await page.locator('#status').textContent({timeout:1000}).catch(() => null);
+    const known = ['Signed in.','Sign-in could not be verified. Start again.',
+      'Sign-in could not start.','Session expired. Sign in again.'];
+    const statusKind = status === null ? 'unavailable' :
+      known.includes(status.trim()) ? status.trim() : 'other';
+    throw Error('Post-rollover sign-in failed: ' + JSON.stringify({
+      phase:page.url().startsWith(idpOrigin) ? 'identity-provider' : 'application',
+      errorType:error.name,
+      statusKind,
+      observations:observed,
+    }),{cause:error});
+  } finally {
+    page.off('response',onResponse);
+    page.off('requestfailed',onFailure);
+    page.off('pageerror',onPageError);
   }
 }
 const search = async page => {
@@ -182,19 +214,21 @@ const search = async page => {
   await page.getByRole('button', {name:'Search',exact:true}).click();
 };
 
-async function waitForBrowserNetwork(context, timeoutMs = 30000) {
+async function waitForBrowserNetwork(context, timeoutMs = 45000) {
   const discovery = idpOrigin + idpRealm + '/.well-known/openid-configuration';
   const until = Date.now() + timeoutMs;
   let consecutive = 0;
   while (Date.now() < until) {
     const probePage = await context.newPage();
     try {
-      const response = await probePage.goto(discovery,{waitUntil:'domcontentloaded',timeout:5000});
-      consecutive = response && response.status() === 200 ? consecutive + 1 : 0;
-    } catch (error) {
-      // Docker network transitions can briefly surface Chromium ERR_NETWORK_CHANGED.
-      // This is an environment readiness probe; the authentication flow itself is
-      // never retried or accepted after a failed attempt.
+      const identity = await probePage.goto(discovery,{waitUntil:'domcontentloaded',timeout:5000});
+      const application = await probePage.goto(origin + '/ready',
+        {waitUntil:'domcontentloaded',timeout:5000});
+      consecutive = identity?.status() === 200 && application?.status() === 200
+        ? consecutive + 1 : 0;
+    } catch {
+      // Only pre-authentication readiness is retried. All credential posts,
+      // token exchanges, authorization responses and security checks stay strict.
       consecutive = 0;
     } finally {
       await probePage.close();
@@ -202,7 +236,7 @@ async function waitForBrowserNetwork(context, timeoutMs = 30000) {
     if (consecutive >= 2) return;
     await new Promise(resolve => setTimeout(resolve,300));
   }
-  throw Error('Chromium could not establish a stable connection to the reference IdP.');
+  throw Error('Chromium could not establish stable IdP and application connectivity.');
 }
 
 (async () => {
