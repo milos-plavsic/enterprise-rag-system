@@ -59,7 +59,7 @@ def compare(grype: dict, trivy: dict, image: str) -> dict:
                 trivy_blocking.append({"id": ident, "package": name, "version": version, "severity": severity})
 
     return {
-        "image_config_digest": image,
+        "image_manifest_digest": manifest,\n        "image_config_digest": config,
         "findings": [
             {"id": ident, "package": pkg, "version": version,
              "scanner_severities": {k: sorted(v) for k, v in sorted(sources.items())}}
@@ -77,7 +77,7 @@ def main() -> int:
     parser.add_argument("image")
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
-    report = compare(json.loads(args.grype.read_bytes()), json.loads(args.trivy.read_bytes()), args.image)
+    report = compare(json.loads(args.grype.read_bytes()), json.loads(args.trivy.read_bytes()),\n                     json.loads(args.identity.read_bytes()))
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     for row in report["trivy_blocking"]:
         print(json.dumps(row))
