@@ -280,10 +280,18 @@ async function waitForBrowserNetwork(context, timeoutMs = 45000) {
 }
 
 (async () => {
-  const browser = await chromium.launch({headless:true, ...(process.env.RAG_BROWSER_EXECUTABLE ? {executablePath:process.env.RAG_BROWSER_EXECUTABLE} : {})});
+  const options = {headless:true, ...(process.env.RAG_BROWSER_EXECUTABLE ? {executablePath:process.env.RAG_BROWSER_EXECUTABLE} : {})};
+  let browser;
   try {
-    // The lab uses a disposable local certificate. curl checks its exact CA separately.
+    // Docker Compose changes host network interfaces. A new browser context
+    // shares Chromium's existing network service and can inherit its stale
+    // network-change state. Every independent login therefore runs in a fresh
+    // Chromium process started *after* the preceding Docker operations.
+    // There are no credential or authorization retries.
     const fresh = async () => {
+      if (browser) await browser.close();
+      browser = await chromium.launch(options);
+      // The lab uses a disposable local certificate. curl checks its exact CA separately.
       const context = await browser.newContext({ignoreHTTPSErrors:true});
       await waitForBrowserNetwork(context);
       const page = await context.newPage();
@@ -394,5 +402,5 @@ async function waitForBrowserNetwork(context, timeoutMs = 45000) {
     compose('up','-d','idp');
     await waitForStatus('/ready',200,90_000);
     console.log('PASS: readiness fails closed during uncached IdP outage and recovers.');
-  } finally { await browser.close(); }
+  } finally { if (browser) await browser.close(); }
 })().catch(err=>{ console.error(err.message);process.exitCode=1; });
