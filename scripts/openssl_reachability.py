@@ -14,7 +14,7 @@ from pathlib import Path
 APP = Path("/app")
 ALLOWED_SYSTEM_OPENSSL_CONSUMERS = ("_ssl.", "_hashlib.")
 SOURCE_MARKERS = {
-    "quic": ("quic", "http3", "http/3"),
+    "quic": ("aioquic", "ssl_quic", "ossl_quic", "http3", "http/3"),
     "dane": ("ssl_dane", "tlsa", "dane"),
     "cms_pkcs7": ("cms_", "pkcs7_", "cms.", "pkcs7."),
     "crl": ("verify_crl_check", "x509_v_flag_crl_check", "verify_flags"),
@@ -135,17 +135,21 @@ def main() -> None:
 
     invariants = {
         "no_quic_stack": (
-            not quic_packages and not markers["quic"] and not any("quic" in name.casefold() for name in ssl_api)
+            not quic_packages and not markers["quic"] and not markers["native"]
+            and not any("quic" in name.casefold() for name in ssl_api)
             and command[protocol_index + 1] == "h11"
         ),
-        "no_dane_api": not markers["dane"] and not any("dane" in name.casefold() for name in ssl_api),
+        "no_dane_api": (
+            not markers["dane"] and not markers["native"]
+            and not any("dane" in name.casefold() for name in ssl_api)
+        ),
         "no_cms_pkcs7_api": (
-            not markers["cms_pkcs7"]
+            not markers["cms_pkcs7"] and not markers["native"]
             and not any(term in name.casefold() for name in ssl_api for term in ("cms", "pkcs7"))
         ),
-        "no_crl_check_configuration": not markers["crl"],
+        "no_crl_check_configuration": not markers["crl"] and not markers["native"],
         "no_direct_pem_stack_api": not markers["pem_stack"] and not markers["native"],
-        "no_suite_b_certificate_flag": not markers["suite_b"],
+        "no_suite_b_certificate_flag": not markers["suite_b"] and not markers["native"],
         "python_tls_ca_loader_only": (
             not unexpected
             and not cryptography_maps
@@ -154,9 +158,7 @@ def main() -> None:
         "sqlite_cli_absent": shutil.which("sqlite3") is None,
         "sqlite_runtime_patched": tuple(map(int, sqlite_version.split("."))) >= (3, 54, 1),
     }
-    if not all(invariants.values()):
-        failed = sorted(name for name, value in invariants.items() if not value)
-        raise RuntimeError("reachability invariants failed: " + ", ".join(failed))
+    failed = sorted(name for name, value in invariants.items() if not value)
 
     evidence = {
         "schema": 1,
@@ -178,8 +180,11 @@ def main() -> None:
     rendered = json.dumps(evidence, indent=2, sort_keys=True) + "\n"
     if str(output_path) == "-":
         sys.stdout.write(rendered)
+        sys.stdout.flush()
     else:
         output_path.write_text(rendered, encoding="utf-8")
+    if failed:
+        raise RuntimeError("reachability invariants failed: " + ", ".join(failed))
 
 
 if __name__ == "__main__":
