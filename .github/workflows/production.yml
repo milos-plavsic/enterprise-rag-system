@@ -82,7 +82,7 @@ jobs:
             rag-investigation.openvex.json
           if-no-files-found: error
       - name: Secondary vulnerability scan of the saved candidate
-        run: bash scripts/trivy_image_scan.sh rag-candidate:${GITHUB_SHA} rag-trivy.json
+        run: bash scripts/trivy_image_scan.sh "$PWD/rag-image.tar" rag-trivy.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: rag-trivy-scan-${{ github.sha }}
