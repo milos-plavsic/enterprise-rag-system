@@ -11,13 +11,14 @@
   },
   "reviewed_against": "https://openssl-library.org/news/vulnerabilities-3.5/",
   "dispositions": {
-    "CVE-2026-124709": {
+    "CVE-2026-107493": {
       "status": "not_affected",
       "justification": "vulnerable_code_not_in_execute_path",
       "required_invariants": [
-        "no_quic_stack"
+        "no_direct_pem_stack_api",
+        "python_tls_ca_loader_only"
       ],
-      "impact_statement": "The service exposes HTTP/1.1 through Uvicorn/h11 and has no QUIC implementation or API path. OpenSSL QUIC server stream handling is not executable in this product."
+      "impact_statement": "Application code makes no direct PEM_X509_INFO calls or native OpenSSL calls. System OpenSSL is reached through CPython TLS certificate loading, whose OpenSSL caller passes a NULL stack; OpenSSL states that path is not affected."
     },
     "CVE-2026-107494": {
       "status": "not_affected",
@@ -36,6 +37,30 @@
       ],
       "impact_statement": "The product does not process CMS or PKCS#7 SignedData and does not enable CRL checking. The attacker-controlled CMS/PKCS#7 verification path described by OpenSSL is absent."
     },
+    "CVE-2026-124709": {
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "required_invariants": [
+        "no_quic_stack"
+      ],
+      "impact_statement": "The service exposes HTTP/1.1 through Uvicorn/h11 and has no QUIC implementation or API path. OpenSSL QUIC server stream handling is not executable in this product."
+    },
+    "CVE-2026-35190": {
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "required_invariants": [
+        "no_suite_b_certificate_flag"
+      ],
+      "impact_statement": "The production service does not configure an OpenSSL TLS server or call SSL_CTX_set_cert_flags with SSL_CERT_FLAG_SUITEB_128_LOS, so the affected TLS 1.3 server key-share path is absent."
+    },
+    "CVE-2026-84785": {
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "required_invariants": [
+        "no_quic_stack"
+      ],
+      "impact_statement": "The production service has no QUIC implementation or execute path, so OpenSSL QUIC stream reassembly cannot be reached."
+    },
     "CVE-2026-84786": {
       "status": "not_affected",
       "justification": "vulnerable_code_not_in_execute_path",
@@ -43,15 +68,6 @@
         "no_dane_api"
       ],
       "impact_statement": "The product does not use OpenSSL DANE APIs or TLSA records, so the affected DANE client validation path is absent."
-    },
-    "CVE-2026-107493": {
-      "status": "not_affected",
-      "justification": "vulnerable_code_not_in_execute_path",
-      "required_invariants": [
-        "no_direct_pem_stack_api",
-        "python_tls_ca_loader_only"
-      ],
-      "impact_statement": "Application code makes no direct PEM_X509_INFO calls or native OpenSSL calls. System OpenSSL is reached through CPython TLS certificate loading, whose OpenSSL caller passes a NULL stack; OpenSSL states that path is not affected."
     }
   },
   "issued_at": "2026-11-25T10:00:00Z",
