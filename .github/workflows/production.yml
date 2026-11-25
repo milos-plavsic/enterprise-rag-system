@@ -161,7 +161,7 @@ jobs:
           assert "sha256:" + digest.hexdigest() == identity["archive_sha256"]
           Path("rag-image.id").write_text(identity["config_digest"] + "\n")
           PY
-          gzip -c rag-image.tar > rag-image.tar.gz
+          gzip -n -9 -c rag-image.tar > rag-image.tar.gz
           sha256sum rag-image.tar.gz rag-image.id rag.spdx.json rag.cdx.json \
             rag-build-metadata.json rag-image-identity.json rag-grype.json rag-trivy.json \
             rag-scan-comparison.json rag-investigation.openvex.json rag-openssl-evidence.json \
