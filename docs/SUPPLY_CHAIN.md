@@ -74,15 +74,23 @@ Only then change the production Dockerfile and repeat exact-tree CI.
 
 ## OCI identity, dual scanning and OpenVEX
 
-The production workflow records Buildx metadata and validates it against the
-raw Grype report before vulnerability evidence is accepted.
-`scripts/image_identity.py` verifies the Buildx config digest, descriptor,
-Grype config digest, Grype embedded manifest bytes and manifest-to-config
-relationship. The validated local manifest digest becomes the candidate product
-identity; the Buildx manifest digest is retained separately because local
-Docker load/export can alter manifest representation while preserving the image
-config. A future registry publication must use and attest the registry digest;
-this workflow does not publish an image.
+The production workflow saves the exact Docker image archive immediately after
+the build and records Buildx metadata. Before vulnerability evidence is
+accepted, `scripts/image_identity.py` hashes the archive itself, selects the
+exact expected tag from its bounded `manifest.json`, hashes the referenced
+config bytes, and rejects unsafe archive paths or a config filename/content
+mismatch. It then verifies that Grype scanned the expected tag, that Grype's
+config digest equals the archive-derived config digest, that Grype's embedded
+manifest bytes hash to its reported manifest digest, and that the manifest
+references the same config digest. Buildx digest fields are cross-checked when
+the current exporter exposes them, but are not assumed to exist.
+
+The validated Grype manifest digest is the local candidate product identity;
+the archive SHA-256 and config digest are retained separately. Docker's
+implementation-specific `.Id` value is deliberately not used as the portable
+identity boundary. A future registry publication must use and attest the
+registry manifest digest and preserve an explicit mapping to the verified
+candidate; this workflow does not publish an image.
 
 Grype is the primary scanner. Trivy 0.76.2 is a digest-pinned secondary scanner
 that scans a saved image archive without the Docker socket, source-tree mount,
