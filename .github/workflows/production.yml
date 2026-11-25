@@ -154,8 +154,11 @@ jobs:
           import hashlib, json
           from pathlib import Path
           identity = json.loads(Path("rag-image-identity.json").read_text())
-          digest = hashlib.sha256(Path("rag-image.tar").read_bytes()).hexdigest()
-          assert "sha256:" + digest == identity["archive_sha256"]
+          digest = hashlib.sha256()
+          with Path("rag-image.tar").open("rb") as stream:
+              for block in iter(lambda: stream.read(1024 * 1024), b""):
+                  digest.update(block)
+          assert "sha256:" + digest.hexdigest() == identity["archive_sha256"]
           Path("rag-image.id").write_text(identity["config_digest"] + "\n")
           PY
           gzip -c rag-image.tar > rag-image.tar.gz
