@@ -182,6 +182,8 @@ jobs:
             rag-build-metadata.json rag-image-identity.json rag-grype.json rag-trivy.json \
             rag-scan-comparison.json rag-investigation.openvex.json rag-openssl-evidence.json \
             rag-release-decisions.json rag-release.openvex.json > SHA256SUMS
+      - name: Verify release checksum manifest
+        run: sha256sum --check SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: rag-candidate-${{ github.sha }}

@@ -14,7 +14,11 @@ CONFIG_BYTES = json.dumps(
     separators=(",", ":"),
 ).encode()
 CONFIG = "sha256:" + hashlib.sha256(CONFIG_BYTES).hexdigest()
-BUILD_MANIFEST = "sha256:" + "b" * 64
+OCI_MANIFEST_BYTES = json.dumps(
+    {"schemaVersion": 2, "config": {"digest": CONFIG, "size": len(CONFIG_BYTES)}, "layers": []},
+    separators=(",", ":"),
+).encode()
+BUILD_MANIFEST = "sha256:" + hashlib.sha256(OCI_MANIFEST_BYTES).hexdigest()
 
 
 def build():
@@ -68,9 +72,15 @@ def docker_archive(tmp_path, *, ref=REF, config_bytes=CONFIG_BYTES):
         [{"Config": config_name, "RepoTags": [ref], "Layers": []}],
         separators=(",", ":"),
     ).encode()
+    index = json.dumps({
+        "schemaVersion": 2,
+        "manifests": [{"digest": BUILD_MANIFEST, "size": len(OCI_MANIFEST_BYTES)}],
+    }, separators=(",", ":")).encode()
     with tarfile.open(path, "w") as archive:
         write_member(archive, "manifest.json", manifest)
         write_member(archive, config_name, config_bytes)
+        write_member(archive, "index.json", index)
+        write_member(archive, "blobs/sha256/" + BUILD_MANIFEST[7:], OCI_MANIFEST_BYTES)
     return path
 
 
@@ -88,7 +98,10 @@ def test_links_archive_config_to_validated_scanner_manifest(tmp_path):
     assert receipt["config_digest"] == CONFIG
     assert receipt["buildx_config_digest"] == CONFIG
     assert receipt["buildx_manifest_digest"] == BUILD_MANIFEST
-    assert receipt["manifest_digest"] == report()["source"]["target"]["manifestDigest"]
+    assert receipt["manifest_digest"] == BUILD_MANIFEST
+    assert receipt["scanner_manifest_digest"] == report()["source"]["target"]["manifestDigest"]
+    assert receipt["scanner_manifest_digest"] != receipt["manifest_digest"]
+    assert receipt["verified_layer_count"] == 0
     assert receipt["product_id"].endswith(receipt["manifest_digest"].split(":", 1)[1])
     assert receipt["archive_sha256"] == archive["archive_sha256"]
 
@@ -151,3 +164,10 @@ def test_unsafe_archive_member_rejected(tmp_path):
         write_member(archive, "config.json", CONFIG_BYTES)
     with pytest.raises(ValueError, match="unsafe"):
         archive_identity(path, REF)
+
+def test_buildx_manifest_must_match_actual_archive_manifest(tmp_path):
+    metadata = build()
+    metadata["containerimage.digest"] = "sha256:" + "a" * 64
+    metadata["containerimage.descriptor"]["digest"] = metadata["containerimage.digest"]
+    with pytest.raises(ValueError, match="Buildx manifest differs"):
+        identity(metadata, report(), REF, archive_identity(docker_archive(tmp_path), REF))

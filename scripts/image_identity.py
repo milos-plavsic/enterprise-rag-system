@@ -13,6 +13,11 @@ import hashlib
 import json
 import re
 import tarfile
+
+if __package__:
+    from .oci_integrity import verify_oci_archive
+else:
+    from oci_integrity import verify_oci_archive
 from pathlib import Path, PurePosixPath
 
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -64,6 +69,9 @@ def archive_identity(path: Path, expected_ref: str) -> dict:
     except (tarfile.TarError, OSError) as exc:
         raise ValueError("invalid Docker image archive") from exc
     with archive:
+        member_names = [member.name for member in archive.getmembers()]
+        if len(member_names) != len(set(member_names)):
+            raise ValueError("duplicate Docker archive member names")
         manifest_raw = _read_member(archive, "manifest.json", MAX_MANIFEST_BYTES)
         try:
             entries = json.loads(manifest_raw)
@@ -82,30 +90,37 @@ def archive_identity(path: Path, expected_ref: str) -> dict:
         if not isinstance(config_name, str):
             raise ValueError("Docker archive config missing")
         config_raw = _read_member(archive, config_name, MAX_CONFIG_BYTES)
-
-    config_digest = "sha256:" + hashlib.sha256(config_raw).hexdigest()
-    basename = PurePosixPath(config_name).name
-    if basename.endswith(".json"):
-        basename = basename[:-5]
-    if HEX.fullmatch(basename) and config_digest != "sha256:" + basename:
-        raise ValueError("Docker archive config filename and bytes disagree")
-    try:
-        config = json.loads(config_raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError("invalid Docker image config JSON") from exc
-    if not isinstance(config, dict) or "rootfs" not in config:
-        raise ValueError("Docker image config incomplete")
+        config_digest = "sha256:" + hashlib.sha256(config_raw).hexdigest()
+        basename = PurePosixPath(config_name).name
+        if basename.endswith(".json"):
+            basename = basename[:-5]
+        if HEX.fullmatch(basename) and config_digest != "sha256:" + basename:
+            raise ValueError("Docker archive config filename and bytes disagree")
+        try:
+            config = json.loads(config_raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError("invalid Docker image config JSON") from exc
+        if not isinstance(config, dict) or "rootfs" not in config:
+            raise ValueError("Docker image config incomplete")
+        canonical_manifest, verified_layer_count = verify_oci_archive(
+            archive, matches[0], config_raw
+        )
 
     return {
         "archive_sha256": "sha256:" + archive_hash.hexdigest(),
         "config_digest": config_digest,
         "config_member": config_name,
+        "manifest_digest": canonical_manifest,
+        "verified_layer_count": verified_layer_count,
     }
 
 
 def identity(build: dict, report: dict, expected_ref: str, archive_receipt: dict) -> dict:
     config = _digest(archive_receipt.get("config_digest"), "archive config digest")
     archive_sha256 = _digest(archive_receipt.get("archive_sha256"), "archive digest")
+    canonical_manifest = _digest(
+        archive_receipt.get("manifest_digest"), "archived OCI image manifest"
+    )
 
     build_config = _optional_digest(
         build.get("containerimage.config.digest"), "Buildx config digest")
@@ -114,6 +129,8 @@ def identity(build: dict, report: dict, expected_ref: str, archive_receipt: dict
 
     build_manifest = _optional_digest(
         build.get("containerimage.digest"), "Buildx manifest digest")
+    if build_manifest is not None and build_manifest != canonical_manifest:
+        raise ValueError("Buildx manifest differs from archived OCI manifest")
     descriptor = build.get("containerimage.descriptor")
     if descriptor is not None:
         if not isinstance(descriptor, dict):
@@ -138,7 +155,9 @@ def identity(build: dict, report: dict, expected_ref: str, archive_receipt: dict
     if not isinstance(target, dict) or target.get("userInput") != expected_ref:
         raise ValueError("Grype scanned an unexpected image reference")
     grype_config = _digest(target.get("imageID"), "Grype config digest")
-    manifest_digest = _digest(target.get("manifestDigest"), "Grype manifest digest")
+    scanner_manifest_digest = _digest(
+        target.get("manifestDigest"), "Grype reconstructed manifest digest"
+    )
     if grype_config != config:
         raise ValueError("Docker archive and Grype config digests differ")
 
@@ -151,7 +170,7 @@ def identity(build: dict, report: dict, expected_ref: str, archive_receipt: dict
     except (ValueError, json.JSONDecodeError) as exc:
         raise ValueError("invalid Grype manifest payload") from exc
     actual_manifest = "sha256:" + hashlib.sha256(manifest_bytes).hexdigest()
-    if actual_manifest != manifest_digest:
+    if actual_manifest != scanner_manifest_digest:
         raise ValueError("Grype manifest digest does not match embedded manifest bytes")
     if manifest.get("config", {}).get("digest") != config:
         raise ValueError("Grype manifest does not reference the archive config digest")
@@ -164,7 +183,7 @@ def identity(build: dict, report: dict, expected_ref: str, archive_receipt: dict
     if not isinstance(timestamp, str) or not timestamp.endswith("Z"):
         raise ValueError("Grype timestamp missing")
 
-    manifest_hex = manifest_digest.split(":", 1)[1]
+    manifest_hex = canonical_manifest.split(":", 1)[1]
     return {
         "schema": 1,
         "source_repository": f"https://github.com/{REPOSITORY}",
@@ -173,7 +192,9 @@ def identity(build: dict, report: dict, expected_ref: str, archive_receipt: dict
             f"https://github.com/{REPOSITORY}/container-images/sha256/{manifest_hex}"
         ),
         "archive_sha256": archive_sha256,
-        "manifest_digest": manifest_digest,
+        "manifest_digest": canonical_manifest,
+        "scanner_manifest_digest": scanner_manifest_digest,
+        "verified_layer_count": archive_receipt["verified_layer_count"],
         "config_digest": config,
         "buildx_manifest_digest": build_manifest,
         "buildx_config_digest": build_config,

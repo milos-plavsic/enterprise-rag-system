@@ -123,7 +123,8 @@ def evaluate(grype: dict, trivy: dict, evidence: dict, policy: dict, identity: d
         raise ValueError("invalid manifest digest")
     if grype.get("source", {}).get("target", {}).get("imageID") != config:
         raise ValueError("Grype identity mismatch")
-    if grype.get("source", {}).get("target", {}).get("manifestDigest") != manifest:
+    if (grype.get("source", {}).get("target", {}).get("manifestDigest")
+            != identity.get("scanner_manifest_digest")):
         raise ValueError("Grype manifest mismatch")
     if trivy.get("Metadata", {}).get("ImageID") != config:
         raise ValueError("Trivy identity mismatch")
@@ -154,6 +155,7 @@ def evaluate(grype: dict, trivy: dict, evidence: dict, policy: dict, identity: d
     return {
         "schema": 1,
         "image_manifest_digest": manifest,
+        "scanner_manifest_digest": identity["scanner_manifest_digest"],
         "image_config_digest": config,
         "resolved": sorted(resolved, key=lambda x: (x["scanner"], x["id"], x["package"])),
         "unresolved": sorted(unresolved, key=lambda x: (x["scanner"], x["id"], x["package"])),

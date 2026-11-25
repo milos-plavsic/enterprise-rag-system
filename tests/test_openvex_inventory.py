@@ -9,6 +9,7 @@ from scripts.check_image_scan import main as release_gate
 
 CONFIG = "sha256:" + "a" * 64
 MANIFEST = "sha256:" + "b" * 64
+SCANNER_MANIFEST = "sha256:" + "f" * 64
 REPORT = "sha256:" + "c" * 64
 GENERATOR = "sha256:" + "d" * 64
 STAMP = "2026-11-25T10:00:00Z"
@@ -24,7 +25,7 @@ def match(ident="CVE-2026-124709", name="libssl3", severity="High"):
 
 def report(*rows):
     return {
-        "source": {"type": "image", "target": {"imageID": CONFIG, "manifestDigest": MANIFEST}},
+        "source": {"type": "image", "target": {"imageID": CONFIG, "manifestDigest": SCANNER_MANIFEST}},
         "matches": list(rows),
     }
 
@@ -32,6 +33,7 @@ def report(*rows):
 def identity():
     return {
         "manifest_digest": MANIFEST,
+        "scanner_manifest_digest": SCANNER_MANIFEST,
         "config_digest": CONFIG,
         "product_id": PRODUCT,
         "scanner": {"name": "grype", "version": "0.110.0", "timestamp": STAMP},

@@ -8,6 +8,7 @@ from scripts.evaluate_release_findings import evaluate, release_vex
 
 CONFIG = "sha256:" + "a" * 64
 MANIFEST = "sha256:" + "b" * 64
+SCANNER_MANIFEST = "sha256:" + "f" * 64
 GENERATOR = "sha256:" + "e" * 64
 
 
@@ -15,6 +16,7 @@ def identity():
     return {
         "config_digest": CONFIG,
         "manifest_digest": MANIFEST,
+        "scanner_manifest_digest": SCANNER_MANIFEST,
         "product_id": (
             "https://github.com/milos-plavsic/enterprise-rag-system/"
             "container-images/sha256/" + "b" * 64
@@ -81,7 +83,7 @@ def grype(*rows):
     return {
         "source": {
             "type": "image",
-            "target": {"imageID": CONFIG, "manifestDigest": MANIFEST},
+            "target": {"imageID": CONFIG, "manifestDigest": SCANNER_MANIFEST},
         },
         "matches": list(rows),
     }
@@ -242,3 +244,27 @@ def test_release_vex_generator_change_changes_document_id():
     )
     assert first["@id"] != second["@id"]
     assert first["tooling"] != second["tooling"]
+
+
+@pytest.mark.parametrize("invariant", [
+    "no_quic_stack",
+    "no_dane_api",
+    "no_cms_pkcs7_api",
+    "no_crl_check_configuration",
+    "no_direct_pem_stack_api",
+    "no_suite_b_certificate_flag",
+    "python_tls_ca_loader_only",
+])
+def test_every_approved_openssl_invariant_fails_closed_when_false(invariant):
+    broken = evidence()
+    broken["invariants"][invariant] = False
+    with pytest.raises(ValueError, match="runtime evidence does not satisfy"):
+        evaluate(grype(gmatch()), trivy(tmatch()), broken, policy(), identity())
+
+
+def test_canonical_manifest_remains_distinct_from_scanner_reconstruction():
+    decisions = evaluate(grype(gmatch()), trivy(tmatch()), evidence(), policy(), identity())
+    assert decisions["image_manifest_digest"] == MANIFEST
+    assert decisions["scanner_manifest_digest"] == SCANNER_MANIFEST
+    vex = release_vex(policy(), evidence(), identity(), GENERATOR, GENERATOR)
+    assert vex["statements"][0]["products"][0]["hashes"]["sha-256"] == MANIFEST[7:]

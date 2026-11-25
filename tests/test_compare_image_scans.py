@@ -4,17 +4,22 @@ from scripts.compare_image_scans import compare
 
 CONFIG = "sha256:" + "a" * 64
 MANIFEST = "sha256:" + "b" * 64
+SCANNER_MANIFEST = "sha256:" + "f" * 64
 
 
 def identity():
-    return {"config_digest": CONFIG, "manifest_digest": MANIFEST}
+    return {
+        "config_digest": CONFIG,
+        "manifest_digest": MANIFEST,
+        "scanner_manifest_digest": SCANNER_MANIFEST,
+    }
 
 
 def grype(severity="High"):
     return {
         "source": {
             "type": "image",
-            "target": {"imageID": CONFIG, "manifestDigest": MANIFEST},
+            "target": {"imageID": CONFIG, "manifestDigest": SCANNER_MANIFEST},
         },
         "matches": [{
             "vulnerability": {"id": "CVE-2026-124709", "severity": severity},

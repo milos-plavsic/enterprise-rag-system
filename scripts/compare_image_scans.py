@@ -33,7 +33,7 @@ def compare(grype: dict, trivy: dict, identity: dict) -> dict:
         raise ValueError("Grype source is not an image")
     target = source.get("target")
     if (not isinstance(target, dict) or target.get("imageID") != config
-            or target.get("manifestDigest") != manifest):
+            or target.get("manifestDigest") != identity.get("scanner_manifest_digest")):
         raise ValueError("Grype image identity mismatch")
 
     if trivy.get("ArtifactType") != "container_image":
@@ -83,6 +83,7 @@ def compare(grype: dict, trivy: dict, identity: dict) -> dict:
     return {
         "schema": 1,
         "image_manifest_digest": manifest,
+        "scanner_manifest_digest": identity["scanner_manifest_digest"],
         "image_config_digest": config,
         "findings": [
             {

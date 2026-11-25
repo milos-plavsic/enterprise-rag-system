@@ -25,7 +25,9 @@ def investigation(report: dict, identity: dict, raw_sha256: str, generator_sha25
     generator_sha256 = _digest(generator_sha256, "generator digest")
     manifest = _digest(identity.get("manifest_digest"), "manifest digest")
     product_id = identity.get("product_id")
-    if not isinstance(product_id, str) or not product_id.startswith("https://github.com/"):
+    if (not isinstance(product_id, str)
+            or not product_id.startswith("https://github.com/")
+            or not product_id.endswith("/" + manifest.split(":", 1)[1])):
         raise ValueError("invalid product identifier")
     scanner = identity.get("scanner")
     if not isinstance(scanner, dict) or scanner.get("name") != "grype":
@@ -38,7 +40,8 @@ def investigation(report: dict, identity: dict, raw_sha256: str, generator_sha25
     if not isinstance(source, dict) or source.get("type") != "image":
         raise ValueError("scanner source is not an image")
     target = source.get("target")
-    if not isinstance(target, dict) or target.get("manifestDigest") != manifest:
+    if (not isinstance(target, dict)
+            or target.get("manifestDigest") != identity.get("scanner_manifest_digest")):
         raise ValueError("scanner manifest does not match identity receipt")
     if target.get("imageID") != identity.get("config_digest"):
         raise ValueError("scanner config does not match identity receipt")
