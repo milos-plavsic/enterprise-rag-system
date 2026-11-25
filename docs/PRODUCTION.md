@@ -75,14 +75,14 @@ Reference baselines for review include [OWASP ASVS](https://owasp.org/www-projec
 The production candidate retains the digest-pinned Python/Alpine base and
 installs exact vendor-signed Alpine `libcrypto3=3.5.9-r1` and
 `libssl3=3.5.9-r1`. Four earlier OpenSSL findings are fixed by that revision.
-Five scanner findings remain for OpenSSL 3.5.9. Their product-specific
+Seven current 17/24 November OpenSSL 3.5.9 advisories are tracked independently of scanner-feed timing. Their product-specific
 classification is governed by
 [SUPPLY_CHAIN.md](SUPPLY_CHAIN.md) and
 `security/openssl-3.5.9-r1-dispositions.json`, not by a generic CVE allowlist.
 
-For those five findings, release requires runtime evidence from the final image
+For those seven advisories, release requires runtime evidence from the final image
 showing that the exact vulnerable execution preconditions are absent. The
-evidence checks the pinned HTTP/1.1 transport, QUIC, DANE, CMS/PKCS#7, CRL and
+evidence checks the pinned HTTP/1.1 transport, QUIC, DANE, CMS/PKCS#7, CRL, Suite B and
 direct PEM/native call paths, native consumers of system OpenSSL, exact package
 versions and related runtime invariants. Any package, source, protocol or native
 consumer drift invalidates the disposition and blocks packaging. Both Grype and
