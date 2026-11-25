@@ -19,6 +19,10 @@ SOURCE_MARKERS = {
     "cms_pkcs7": ("cms_", "pkcs7_", "cms.", "pkcs7."),
     "crl": ("verify_crl_check", "x509_v_flag_crl_check", "verify_flags"),
     "pem_stack": ("pem_x509_info",),
+    "suite_b": (
+        "ssl_ctx_set_cert_flags", "ssl_cert_flag_suiteb_128_los",
+        "suiteb_128_los", "suiteb",
+    ),
     "native": ("ctypes.", "ctypes import", "cffi.", "cffi import"),
 }
 
@@ -129,6 +133,7 @@ def main() -> None:
         ),
         "no_crl_check_configuration": not markers["crl"],
         "no_direct_pem_stack_api": not markers["pem_stack"] and not markers["native"],
+        "no_suite_b_certificate_flag": not markers["suite_b"],
         "python_tls_ca_loader_only": (
             not unexpected
             and "libssl.so.3" not in cryptography_ldd
