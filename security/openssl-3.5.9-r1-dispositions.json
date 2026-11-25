@@ -53,5 +53,8 @@
       ],
       "impact_statement": "Application code makes no direct PEM_X509_INFO calls or native OpenSSL calls. System OpenSSL is reached through CPython TLS certificate loading, whose OpenSSL caller passes a NULL stack; OpenSSL states that path is not affected."
     }
-  }
+  },
+  "issued_at": "2026-11-25T10:00:00Z",
+  "author": "https://github.com/milos-plavsic",
+  "role": "Product Security Maintainer"
 }
