@@ -24,7 +24,15 @@ class VerificationError(Exception):
     """Alert evidence is unavailable, stale, or ambiguous."""
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise VerificationError("Unexpected GitHub API redirect")
+
+
 def api_get(path: str, token: str) -> object:
+    # Authenticate exclusively to the fixed GitHub HTTPS API origin.
+    if not path.startswith("/repos/" + REPO + "/"):
+        raise VerificationError("Unexpected GitHub API path")
     request = urllib.request.Request(
         "https://api.github.com" + path,
         headers={
@@ -35,7 +43,10 @@ def api_get(path: str, token: str) -> object:
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(), NoRedirect()
+        )
+        with opener.open(request, timeout=15) as response:
             if response.status != 200:
                 raise VerificationError(f"GitHub returned HTTP {response.status}")
             raw = response.read(1_048_577)

@@ -119,3 +119,11 @@ class TestCodeQLProof(TestCase):
                                side_effect=[a, p, rows * 100]):
             with self.assertRaises(q.VerificationError):
                 q.check("fake", SHA)
+
+    def test_api_path_escape_rejected(self):
+        with self.assertRaises(q.VerificationError):
+            q.api_get("/another/endpoint", "fake")
+
+    def test_redirect_is_rejected(self):
+        with self.assertRaises(q.VerificationError):
+            q.NoRedirect().redirect_request(None, None, 302, "", {}, "http://wrong.test")
