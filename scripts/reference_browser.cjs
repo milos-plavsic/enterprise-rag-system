@@ -275,8 +275,10 @@ async function waitForBrowserNetwork(context, timeoutMs = 30000) {
     assert.notEqual(newKid,oldKid);
     await waitForPublishedSigningKey(newKid);
     await waitForIssuedSigningKey(newKid);
-    // Fresh verifier process guarantees the old cached key set cannot mask rollover.
-    compose('up','-d','--no-deps','--force-recreate','api');
+    // A process restart is sufficient to clear the verifier's in-memory JWKS cache.
+    // Preserve the container/network endpoint so Chromium does not observe an
+    // unrelated Docker topology change during the authentication assertion.
+    compose('restart','api');
     await waitForStatus('/ready',200,90000);
     page = await fresh();
     await expectRotatedSignIn(page);
@@ -308,9 +310,11 @@ async function waitForBrowserNetwork(context, timeoutMs = 30000) {
     await page.waitForURL(url => url.origin === 'https://localhost:8443' && url.pathname.includes('/login-actions/'));
     await page.getByText(/invalid username or password|account is disabled|account disabled|invalid credentials/i).first().waitFor();
     console.log('PASS: fresh role mismatch denied and disabled account cannot sign in.');
-    // Restart the API during the outage to remove cached signing keys.
+    // Restart the API process during the outage to remove cached signing keys.
+    // Do not recreate its network endpoint: the security condition is an empty
+    // verifier cache while the IdP is unavailable, not a new container identity.
     compose('stop','idp');
-    compose('up','-d','--no-deps','--force-recreate','api');
+    compose('restart','api');
     await waitForStatus('/health',200);
     await waitForStatus('/ready',503);
     compose('up','-d','idp');
