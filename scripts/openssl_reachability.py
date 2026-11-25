@@ -5,7 +5,6 @@ import hashlib
 import importlib.metadata
 import json
 import os
-import pathlib
 import shutil
 import ssl
 import subprocess
