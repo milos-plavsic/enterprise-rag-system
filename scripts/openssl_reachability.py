@@ -109,11 +109,23 @@ def main() -> None:
         if not os.path.basename(row["path"]).startswith(ALLOWED_SYSTEM_OPENSSL_CONSUMERS)
     ]
 
+    # Inspect cryptography in a fresh interpreter. Alpine/musl ldd can return
+    # 127 for extension modules even when they load correctly; /proc/self/maps
+    # gives direct evidence of which system OpenSSL DSOs the binding actually maps.
+    probe = (
+        "import json; import cryptography.hazmat.bindings._rust as binding; "
+        "maps=open('/proc/self/maps', encoding='utf-8').read().splitlines(); "
+        "rows=sorted({line.rsplit(None,1)[-1] for line in maps "
+        "if 'libssl.so.3' in line or 'libcrypto.so.3' in line}); "
+        "print(json.dumps({'binding': binding.__file__, 'system_openssl_maps': rows}))"
+    )
     try:
-        import cryptography.hazmat.bindings._rust as cryptography_rust
-        cryptography_ldd = run("ldd", cryptography_rust.__file__)
-    except (ImportError, subprocess.CalledProcessError) as exc:
+        cryptography_probe = json.loads(run(sys.executable, "-I", "-c", probe))
+    except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
         raise RuntimeError("cannot inspect cryptography native binding") from exc
+    cryptography_maps = cryptography_probe.get("system_openssl_maps")
+    if not isinstance(cryptography_maps, list) or any(not isinstance(row, str) for row in cryptography_maps):
+        raise RuntimeError("invalid cryptography native binding evidence")
 
     sqlite_version = __import__("sqlite3").sqlite_version
     openssl_version = ssl.OPENSSL_VERSION
@@ -136,8 +148,7 @@ def main() -> None:
         "no_suite_b_certificate_flag": not markers["suite_b"],
         "python_tls_ca_loader_only": (
             not unexpected
-            and "libssl.so.3" not in cryptography_ldd
-            and "libcrypto.so.3" not in cryptography_ldd
+            and not cryptography_maps
             and not markers["native"]
         ),
         "sqlite_cli_absent": shutil.which("sqlite3") is None,
@@ -161,7 +172,7 @@ def main() -> None:
         "source_markers": markers,
         "system_openssl_consumers": consumers,
         "unexpected_system_openssl_consumers": unexpected,
-        "cryptography_native_ldd": cryptography_ldd,
+        "cryptography_native_binding": cryptography_probe,
         "invariants": invariants,
     }
     rendered = json.dumps(evidence, indent=2, sort_keys=True) + "\n"
