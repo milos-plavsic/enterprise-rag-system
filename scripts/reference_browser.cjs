@@ -7,6 +7,8 @@ const path = require('node:path');
 
 const directory = process.env.RAG_LAB_PATH;
 const origin = 'http://localhost:8000';
+const idpOrigin = 'https://localhost:8443';
+const idpRealm = '/realms/juniper';
 const accounts = JSON.parse(readFileSync(path.join(directory, 'keycloak/accounts.json')));
 const prefix = ['compose', '--env-file', path.join(directory, 'compose.env'), '-p', 'juniper-reference', '-f', 'compose.production.yml', '-f', 'compose.reference.yml'];
 function docker(args, capture = false, input) {
@@ -20,12 +22,28 @@ const publish = release => {
   assert.equal(spawnSync('python3', ['reference/corpus.py', path.join(directory, 'source'), String(release)], {stdio:'inherit'}).status, 0);
   admin('sync-source', '/lab/source');
 };
-const signIn = async (page, user, hash = '') => {
-  await page.goto(`${origin}/reference/${hash}`);
-  await page.getByRole('button', {name:'Sign in'}).click();
+const isIdpAuth = url => url.origin === idpOrigin &&
+  url.pathname === idpRealm + '/protocol/openid-connect/auth';
+const isCredentialPost = response => response.request().method() === 'POST' &&
+  new URL(response.url()).origin === idpOrigin &&
+  new URL(response.url()).pathname.includes('/login-actions/authenticate');
+const signIn = async (page, user, hash = '', expectCallback = true) => {
+  await page.goto(`${origin}/reference/${hash}`,
+    {waitUntil:'domcontentloaded',timeout:45000});
+  const atIdp = page.waitForURL(isIdpAuth,{timeout:45000});
+  await page.getByRole('button',{name:'Sign in'}).click();
+  await atIdp;
+  await page.locator('#username').waitFor({state:'visible',timeout:45000});
   await page.locator('#username').fill(user);
   await page.locator('#password').fill(accounts[user].password);
+  const submitted = page.waitForResponse(isCredentialPost,{timeout:45000});
+  const callback = expectCallback ? page.waitForURL(
+    url => url.origin === origin && url.pathname === '/reference/',
+    {timeout:45000}) : null;
   await page.locator('#kc-login').click();
+  const response = await submitted;
+  if (callback) await callback;
+  return response;
 };
 const citationUrl = hash => origin + hash.slice(1);
 async function expectCitationAfterSignIn(page, user, hash, expectedStatus, message) {
@@ -80,23 +98,25 @@ async function waitForPublishedSigningKey(kid, timeoutMs = 30000) {
   throw Error('Rotated signing key was not published in the trusted JWKS within 30 seconds.');
 }
 async function expectRotatedSignIn(page) {
-  // Capture only HTTP status, not URLs, response bodies, credentials or tokens.
-  let tokenStatus = 'no response';
-  const observe = response => {
+  const token = page.waitForResponse(response => {
     const url = new URL(response.url());
-    if (url.origin === 'https://localhost:8443' &&
-        url.pathname === '/realms/juniper/protocol/openid-connect/token') {
-      tokenStatus = response.status();
-    }
-  };
-  page.on('response', observe);
+    return response.request().method() === 'POST' &&
+      url.origin === idpOrigin &&
+      url.pathname === idpRealm + '/protocol/openid-connect/token';
+  },{timeout:45000});
   try {
     await signIn(page,'avery');
-    await page.getByText('Signed in.',{exact:true}).waitFor();
+    const tokenResponse = await token;
+    assert.equal(tokenResponse.status(),200,
+      `rotated-key token endpoint returned ${tokenResponse.status()}`);
+    await page.getByText('Signed in.',{exact:true}).waitFor({timeout:15000});
   } catch (error) {
-    const failed = await page.getByText('Sign-in could not be verified. Start again.',{exact:true}).isVisible();
-    throw Error(`Post-rollover sign-in failed (token endpoint status: ${tokenStatus}; callback failure: ${failed}).`, {cause:error});
-  } finally { page.off('response', observe); }
+    const failed = await page.getByText(
+      'Sign-in could not be verified. Start again.',{exact:true}).isVisible();
+    throw Error(
+      `Post-rollover sign-in failed (callback failure: ${failed}; phase: ${page.url().startsWith(idpOrigin) ? 'identity-provider' : 'application'}).`,
+      {cause:error});
+  }
 }
 const search = async page => {
   await page.locator('#question').fill('Which expense needs manager approval?');
@@ -111,6 +131,7 @@ const search = async page => {
       const context = await browser.newContext({ignoreHTTPSErrors:true});
       const page = await context.newPage();
       page.setDefaultTimeout(30000);
+      page.setDefaultNavigationTimeout(45000);
       return page;
     };
     let page = await fresh();
@@ -197,10 +218,7 @@ const search = async page => {
     docker(['exec','-T','idp','/opt/keycloak/bin/kcadm.sh','update',userPath,'-r','juniper','-n','-f','-'],false,JSON.stringify(disabled));
     assert.equal(user().enabled,false);
     page = await fresh();
-    const credentialsSubmitted = page.waitForResponse(r => r.request().method() === 'POST' &&
-      new URL(r.url()).origin === 'https://localhost:8443' && new URL(r.url()).pathname.includes('/login-actions/authenticate'));
-    await signIn(page,'avery');
-    const refusal = await credentialsSubmitted;
+    const refusal = await signIn(page,'avery','',false);
     assert.ok(refusal.status() === 200 || refusal.status() === 400 || refusal.status() === 403,
       `unexpected disabled-login status ${refusal.status()}`);
     await page.waitForURL(url => url.origin === 'https://localhost:8443' && url.pathname.includes('/login-actions/'));
