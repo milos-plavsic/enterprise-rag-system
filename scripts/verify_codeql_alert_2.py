@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.error
@@ -84,7 +85,13 @@ def verify(alert: object, instances: object, pull: object, merge_sha: str) -> No
     if (pull.get("merge_commit_sha") != merge_sha
             or pull.get("state") != "open"
             or (pull.get("base") or {}).get("ref") != "main"):
-        raise VerificationError("Stale PR merge SHA or unexpected base")
+        raise VerificationError(
+            "PR metadata disagreement: checked-out merge "
+            + merge_sha[:12] + ", API merge "
+            + str(pull.get("merge_commit_sha", ""))[:12] + ", state "
+            + str(pull.get("state", "")) + ", base "
+            + str((pull.get("base") or {}).get("ref", ""))
+        )
     if not isinstance(instances, list):
         raise VerificationError("Missing alert instance list")
     rows = [row for row in instances if isinstance(row, dict)
@@ -126,18 +133,35 @@ def check(token: str, merge_sha: str) -> None:
     raise VerificationError("CodeQL verification exhausted")
 
 
+def checked_out_merge_sha() -> str:
+    # Actions checkout resolves the actual PR merge ref. GITHUB_SHA describes
+    # the workflow event and is not a substitute for the checked-out tree.
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"], check=True, text=True,
+            capture_output=True, timeout=10,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise VerificationError("Cannot resolve checked-out PR merge commit") from exc
+    sha = result.stdout.strip()
+    if len(sha) != 40 or any(c not in "0123456789abcdef" for c in sha):
+        raise VerificationError("Invalid checked-out PR merge commit SHA")
+    return sha
+
+
 def main() -> int:
     try:
+        merge_sha = checked_out_merge_sha()
         require_identity(
             os.environ.get("GITHUB_REPOSITORY", ""),
             os.environ.get("GITHUB_REF", ""),
             os.environ.get("GITHUB_EVENT_NAME", ""),
-            os.environ.get("GITHUB_SHA", ""),
+            merge_sha,
         )
         token = os.environ.get("GH_TOKEN", "")
         if not token:
             raise VerificationError("Missing read-only GitHub Actions token")
-        check(token, os.environ["GITHUB_SHA"])
+        check(token, merge_sha)
     except VerificationError as exc:
         print(f"NOT VERIFIED: {exc}", file=sys.stderr)
         return 1

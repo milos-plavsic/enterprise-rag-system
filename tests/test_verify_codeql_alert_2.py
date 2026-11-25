@@ -127,3 +127,15 @@ class TestCodeQLProof(TestCase):
     def test_redirect_is_rejected(self):
         with self.assertRaises(q.VerificationError):
             q.NoRedirect().redirect_request(None, None, 302, "", {}, "http://wrong.test")
+
+    def test_checkout_merge_commit_used(self):
+        with mock.patch.object(q.subprocess, "run") as runner:
+            runner.return_value.stdout = SHA + "\\n"
+            self.assertEqual(q.checked_out_merge_sha(), SHA)
+            runner.assert_called_once()
+
+    def test_malformed_checkout_merge_commit_rejected(self):
+        with mock.patch.object(q.subprocess, "run") as runner:
+            runner.return_value.stdout = "invalid-sha"
+            with self.assertRaises(q.VerificationError):
+                q.checked_out_merge_sha()
