@@ -2,6 +2,7 @@
 const { chromium } = require('playwright');
 const { readFileSync } = require('node:fs');
 const { spawnSync } = require('node:child_process');
+const https = require('node:https');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 
@@ -10,6 +11,8 @@ const origin = 'http://localhost:8000';
 const idpOrigin = 'https://localhost:8443';
 const idpRealm = '/realms/juniper';
 const accounts = JSON.parse(readFileSync(path.join(directory, 'keycloak/accounts.json')));
+const probe = JSON.parse(readFileSync(path.join(directory, 'keycloak/probe.json')));
+const labCa = readFileSync(path.join(directory,'cert.pem'));
 const prefix = ['compose', '--env-file', path.join(directory, 'compose.env'), '-p', 'juniper-reference', '-f', 'compose.production.yml', '-f', 'compose.reference.yml'];
 function docker(args, capture = false, input) {
   const result = spawnSync('docker', [...prefix, ...args], {stdio: [input === undefined ? 'ignore' : 'pipe',capture ? 'pipe' : 'inherit','inherit'], input, encoding:'utf8',timeout:90000});
@@ -118,6 +121,62 @@ async function waitForPublishedSigningKey(kid, timeoutMs = 30000) {
   }
   throw Error('Rotated signing key was not published in the trusted JWKS within 30 seconds.');
 }
+
+function probeToken() {
+  return new Promise((resolve,reject) => {
+    const body = 'grant_type=client_credentials';
+    const authorization = 'Basic ' + Buffer.from(
+      `${probe.client_id}:${probe.client_secret}`,'utf8').toString('base64');
+    const request = https.request({
+      hostname:'localhost',port:8443,path:idpRealm + '/protocol/openid-connect/token',
+      method:'POST',ca:labCa,rejectUnauthorized:true,timeout:4000,
+      headers:{Authorization:authorization,'Content-Type':'application/x-www-form-urlencoded',
+        'Content-Length':Buffer.byteLength(body)},
+    }, response => {
+      const chunks = [];
+      let size = 0;
+      response.on('data', chunk => {
+        size += chunk.length;
+        if (size > 65536) {
+          request.destroy(Error('probe token response exceeds 64 KiB'));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on('end', () => resolve({
+        status:response.statusCode,
+        body:Buffer.concat(chunks).toString('utf8'),
+      }));
+    });
+    request.on('timeout',() => request.destroy(Error('probe token request timed out')));
+    request.on('error',reject);
+    request.end(body);
+  });
+}
+async function waitForIssuedSigningKey(kid, timeoutMs = 30000) {
+  const until = Date.now() + timeoutMs;
+  let lastStatus = 'no response';
+  while (Date.now() < until) {
+    try {
+      const result = await probeToken();
+      lastStatus = result.status;
+      if (result.status === 200) {
+        const token = JSON.parse(result.body).access_token;
+        if (typeof token === 'string') {
+          const parts = token.split('.');
+          if (parts.length === 3) {
+            const header = JSON.parse(Buffer.from(parts[0],'base64url').toString('utf8'));
+            if (header.kid === kid && header.alg === 'RS256') return;
+          }
+        }
+      }
+    } catch (error) {
+      lastStatus = error.name;
+    }
+    await new Promise(resolve => setTimeout(resolve,500));
+  }
+  throw Error(`Rotated signing key did not issue a probe token within 30 seconds (last status: ${lastStatus}).`);
+}
 async function expectRotatedSignIn(page) {
   try {
     await signIn(page,'avery');
@@ -202,6 +261,7 @@ const search = async page => {
     assert.equal(typeof newKid,'string');
     assert.notEqual(newKid,oldKid);
     await waitForPublishedSigningKey(newKid);
+    await waitForIssuedSigningKey(newKid);
     // Fresh verifier process guarantees the old cached key set cannot mask rollover.
     compose('up','-d','--no-deps','--force-recreate','api');
     await waitForStatus('/ready',200,90000);
