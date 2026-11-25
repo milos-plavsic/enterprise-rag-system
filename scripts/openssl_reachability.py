@@ -160,7 +160,11 @@ def main() -> None:
         "cryptography_native_ldd": cryptography_ldd,
         "invariants": invariants,
     }
-    output_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    rendered = json.dumps(evidence, indent=2, sort_keys=True) + "\n"
+    if str(output_path) == "-":
+        sys.stdout.write(rendered)
+    else:
+        output_path.write_text(rendered, encoding="utf-8")
 
 
 if __name__ == "__main__":
