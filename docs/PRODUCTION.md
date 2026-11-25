@@ -88,7 +88,7 @@ versions and related runtime invariants. Any package, source, protocol or native
 consumer drift invalidates the disposition and blocks packaging. Both Grype and
 Trivy findings are evaluated; scanner disagreement is retained as evidence and
 never acts as an exception. The resulting investigation and reviewed release
-OpenVEX documents must both pass strict `vexctl` validation.
+OpenVEX documents must both pass the pinned official v0.2.0 JSON Schema with format assertions in the isolated validation container.
 
 The production image also updates Alpine `zlib` and `krb5-libs` to vendor
 fixed packages. It temporarily uses the checksum-pinned, signed Alpine
