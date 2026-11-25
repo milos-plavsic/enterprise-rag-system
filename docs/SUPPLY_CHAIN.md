@@ -103,7 +103,7 @@ Two OpenVEX v0.2.0 documents are produced. The investigation document keeps
 blocking findings `under_investigation` and is deterministic over the
 candidate manifest, raw scan hash and generator hash. The reviewed release VEX
 is produced only when the exact source-controlled disposition scope and runtime
-evidence match. Both documents are validated against the official OpenVEX v0.2.0 JSON Schema fetched from the immutable specification commit `7667061835da09300f913e26be10ee03c05e784d`. Validation runs offline with a digest-pinned Sourcemeta JSON Schema engine and format assertions enabled. The latest released `vexctl` v0.4.4 predates its `validate` subcommand, so CI does not pretend that command exists or depend on an unreleased tool build.
+evidence match. Both documents are validated against the official OpenVEX v0.2.0 JSON Schema fetched from the immutable specification commit `50abcfe257f1fc36ded2a17cc78e25821958cca2`. Validation runs offline with a digest-pinned Sourcemeta JSON Schema engine and format assertions enabled. The latest released `vexctl` v0.4.4 predates its `validate` subcommand, so CI does not pretend that command exists or depend on an unreleased tool build.
 
 The existing SQLite disposition remains exact: only
 `CVE-2026-119586` on Alpine `sqlite-libs` 3.54.1-r0 can be classified
