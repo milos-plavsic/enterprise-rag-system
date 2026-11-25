@@ -15,6 +15,10 @@ from pathlib import Path
 BLOCKING = {"high", "critical", "unknown"}
 SEVERITIES = {"negligible", "low", "medium", "high", "critical", "unknown"}
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
+EXPECTED_OPENSSL_CVES = frozenset({
+    "CVE-2026-124709", "CVE-2026-107494", "CVE-2026-121482",
+    "CVE-2026-84786", "CVE-2026-107493",
+})
 
 
 def severity(value: object) -> str:
@@ -43,6 +47,11 @@ def _policy(policy: dict, evidence: dict) -> tuple[dict, set[str]]:
     dispositions = policy.get("dispositions")
     if not isinstance(dispositions, dict) or not dispositions:
         raise ValueError("dispositions missing")
+    if set(dispositions) != EXPECTED_OPENSSL_CVES:
+        raise ValueError("OpenSSL disposition set must match the independently reviewed CVEs")
+    source_digest = evidence.get("source_tree_sha256")
+    if not isinstance(source_digest, str) or not DIGEST.fullmatch(source_digest):
+        raise ValueError("runtime source digest missing")
     for cve, disposition in dispositions.items():
         if not re.fullmatch(r"CVE-[0-9]{4}-[0-9]{4,}", cve):
             raise ValueError("invalid disposition CVE")
