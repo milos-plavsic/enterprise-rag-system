@@ -57,18 +57,58 @@ const signIn = async (page, user, hash = '', expectCallback = true) => {
 const citationUrl = hash => origin + hash.slice(1);
 async function expectCitationAfterSignIn(page, user, hash, expectedStatus, message) {
   assert.ok(hash.startsWith('#/v1/documents/'), `unexpected citation hash ${hash}`);
-  // Register before navigation so the assertion covers the browser application's
-  // own authenticated request after the OAuth callback. This is stronger than
-  // inspecting the internal token exchange and cannot be satisfied without a
-  // successful callback, bearer token and authorization decision.
-  const citation = page.waitForResponse(r =>
-    r.request().method() === 'GET' && r.url() === citationUrl(hash),
-    {timeout:45000});
-  await signIn(page,user,hash);
-  const verification = await citation;
-  assert.equal(verification.status(),expectedStatus,
-    `citation ${hash} returned ${verification.status()}, expected ${expectedStatus}`);
-  await page.getByText(message,{exact:true}).waitFor({timeout:15000});
+  const matched = [];
+  const observed = [];
+  const record = row => { observed.push(row); if (observed.length > 16) observed.shift(); };
+  // Observe before navigation, but never create a floating waitForResponse
+  // promise: it can reject unhandled while the concurrent OAuth flow is active.
+  const onResponse = response => {
+    const url = new URL(response.url());
+    if (response.request().method() === 'GET' && response.url() === citationUrl(hash)) {
+      matched.push(response.status());
+    }
+    if (url.origin === origin || url.origin === idpOrigin) {
+      const isAuth = url.origin === idpOrigin &&
+        (url.pathname.startsWith(idpRealm + '/protocol/openid-connect/') ||
+          url.pathname.includes('/login-actions/'));
+      const isApp = url.origin === origin &&
+        (url.pathname === '/reference/' || url.pathname === citationUrl(hash).replace(origin,''));
+      if (isAuth || isApp) record({kind:'response',path:url.pathname,status:response.status()});
+    }
+  };
+  const onFailure = request => {
+    const url = new URL(request.url());
+    if (url.origin !== origin && url.origin !== idpOrigin) return;
+    const failure = request.failure()?.errorText || '';
+    record({kind:'network',path:url.pathname,
+      category:/ERR_[A-Z_]+/.exec(failure)?.[0] || 'network-error'});
+  };
+  const onPageError = error => record({kind:'page-error',name:error.name});
+  page.on('response',onResponse);
+  page.on('requestfailed',onFailure);
+  page.on('pageerror',onPageError);
+  try {
+    await signIn(page,user,hash);
+    // The application only displays this message after its OAuth callback
+    // and the citation request have actually run.
+    await page.getByText(message,{exact:true}).waitFor({timeout:45000});
+    assert.deepEqual(matched,[expectedStatus],
+      'Authenticated browser citation must return exactly the expected status');
+  } catch (error) {
+    const status = await page.locator('#status').textContent({timeout:1000}).catch(() => null);
+    const known = ['Signed in.','Sign-in could not be verified. Start again.',
+      'Sign-in could not start.','Session expired. Sign in again.',
+      'Access is no longer available.','This passage is unavailable.'];
+    const statusKind = status === null ? 'unavailable' :
+      known.includes(status.trim()) ? status.trim() : 'other';
+    throw Error('Authenticated deep-link verification failed: ' + JSON.stringify({
+      errorType:error.name,statusKind,matched,expectedStatus,observations:observed,
+    }),{cause:error});
+  } finally {
+    page.off('response',onResponse);
+    page.off('requestfailed',onFailure);
+    page.off('pageerror',onPageError);
+  }
 }
 async function expectCitationHash(page, hash, expectedStatus, message) {
   assert.ok(hash.startsWith('#/v1/documents/'), `unexpected citation hash ${hash}`);
