@@ -68,7 +68,7 @@ jobs:
       - name: Fetch immutable official OpenVEX v0.2.0 schema
         run: |
           set -euo pipefail
-          spec=7667061835da09300f913e26be10ee03c05e784d
+          spec=50abcfe257f1fc36ded2a17cc78e25821958cca2
           git init -q "$RUNNER_TEMP/openvex-spec"
           git -C "$RUNNER_TEMP/openvex-spec" remote add origin https://github.com/openvex/spec.git
           git -C "$RUNNER_TEMP/openvex-spec" fetch -q --depth=1 origin "$spec"
