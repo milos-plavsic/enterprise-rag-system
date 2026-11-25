@@ -66,7 +66,7 @@ def compare(grype: dict, trivy: dict, image: str) -> dict:
             for (ident, pkg, version), sources in sorted(findings.items())
         ],
         "trivy_blocking": sorted(trivy_blocking, key=lambda x: (x["id"], x["package"], x["version"])),
-        "note": "Grype is separately enforced; scanner discrepancies are not exceptions.",
+        "note": "This file is evidence only. Release policy is enforced by evaluate_release_findings.py; scanner discrepancies are not exceptions.",
     }
 
 
@@ -81,7 +81,7 @@ def main() -> int:
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     for row in report["trivy_blocking"]:
         print(json.dumps(row))
-    return int(bool(report["trivy_blocking"]))
+    return 0
 
 
 if __name__ == "__main__":
