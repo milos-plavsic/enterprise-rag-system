@@ -9,7 +9,7 @@ permissions:
 jobs:
   reference:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -31,6 +31,17 @@ jobs:
             -v "$PWD/reference:/app/reference:ro" \
             -v "$PWD/reference_benchmark.py:/app/reference_benchmark.py:ro" \
             -e OPENBLAS_NUM_THREADS=1 juniper-rag:local /app/reference_benchmark.py > reference-report.json
+      - name: Prove reference security lifecycle stability across 10 clean runs
+        env:
+          NODE_PATH: .github/reference-browser/node_modules
+          RAG_LAB_TEST_MODEL: "0"
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 10); do
+            echo "::group::reference stability run $attempt/10"
+            bash scripts/reference_compose_smoke.sh "$RUNNER_TEMP/juniper-stability-$attempt"
+            echo "::endgroup::"
+          done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: juniper-fictional-retrieval-report
