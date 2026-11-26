@@ -322,3 +322,27 @@ class TestCodeQLPremergeProof(TestCase):
             )
             sleep.assert_called_once_with(q.DELAY_SECONDS)
 
+    def test_pull_number_parsing_and_future_pr_mode(self):
+        future_ref = "refs/pull/11/merge"
+        self.assertEqual(q.pr_number_from_ref(future_ref), 11)
+        self.assertEqual(q.execution_mode(q.REPO, future_ref, "pull_request", MERGE), "premerge")
+        for bad in ["refs/pull/0/merge", "refs/pull/x/merge", "refs/heads/main"]:
+            with self.assertRaises(q.VerificationError):
+                q.pr_number_from_ref(bad)
+
+    def test_unrelated_pr_is_blocked_until_original_alert_is_fixed(self):
+        alert, analyses, _, _ = fixture()
+        analyses[0]["ref"] = "refs/pull/11/merge"
+        with self.assertRaises(q.VerificationError):
+            q.verify_premerge(alert, analyses, [], MERGE, 11)
+
+    def test_future_pr_rechecks_original_rule_after_formal_fix(self):
+        alert, analyses, _, _ = fixture()
+        alert["state"] = "fixed"
+        alert["fixed_at"] = "2026-11-26T12:00:00Z"
+        analyses[0]["ref"] = "refs/pull/11/merge"
+        self.assertEqual(
+            q.verify_premerge(alert, analyses, [], MERGE, 11),
+            (RULE, 9001),
+        )
+
