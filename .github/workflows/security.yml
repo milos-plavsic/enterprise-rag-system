@@ -41,9 +41,9 @@ jobs:
       - uses: github/codeql-action/analyze@5895b2c9be147bc7f1c75ce72c5cb577febb1907 # v4
 
   codeql_original_alert:
-    name: "CodeQL alert #2 remediated in PR"
+    name: "CodeQL original TLS regression gate"
     needs: codeql
-    if: github.event_name == 'pull_request' && github.event.pull_request.number == 10
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     permissions:
