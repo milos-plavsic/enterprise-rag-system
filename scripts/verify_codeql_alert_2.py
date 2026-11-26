@@ -93,6 +93,12 @@ def execution_mode(repo: str, ref: str, event: str, sha: str) -> str:
     raise VerificationError("Unexpected event/ref for CodeQL closure verification")
 
 
+def require_identity(repo: str, ref: str, event: str, merge_sha: str) -> None:
+    """Backwards-compatible strict PR-only identity check."""
+    if execution_mode(repo, ref, event, merge_sha) != "premerge":
+        raise VerificationError("Unexpected repository, event or PR merge ref")
+
+
 def validate_original_alert(alert: object) -> str:
     if not isinstance(alert, dict) or alert.get("number") != ALERT_NUMBER:
         raise VerificationError("Wrong original CodeQL alert")
