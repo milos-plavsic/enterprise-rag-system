@@ -9,7 +9,7 @@
       { "context": "static", "app_id": 15368 },
       { "context": "CodeQL (Python)", "app_id": 15368 },
       { "context": "CodeQL", "app_id": 57789 },
-      { "context": "CodeQL alert", "app_id": 15368 },
+      { "context": "CodeQL alert #2 remediated in PR", "app_id": 15368 },
       { "context": "image", "app_id": 15368 },
       { "context": "reference", "app_id": 15368 },
       { "context": "Evaluate alpine-current", "app_id": 15368 },
