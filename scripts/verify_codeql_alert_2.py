@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
-"""Verify original CodeQL TLS finding is absent from a freshly analysed PR merge.
+"""Verify the original CodeQL TLS finding across PR and default-branch gates.
 
-Original alert closure on the default branch is a post-merge requirement.
-Read-only security-events token. No dismissal, mutation, or waiver.
+PR gate:
+  * prove main is already protected and the PR base is the current main tip;
+  * prove CodeQL analysed the exact current PR merge commit;
+  * prove the original TLS rule has no open finding on that merge ref.
+
+Main gate:
+  * prove the checked-out commit is the protected main tip;
+  * prove CodeQL analysed that exact main commit;
+  * prove alert #2 is formally fixed (never dismissed/waived);
+  * prove no open CodeQL finding for the original rule remains on main.
+
+All queries are read-only and fail closed.
 """
 from __future__ import annotations
 
@@ -18,12 +28,13 @@ import urllib.request
 REPO = "milos-plavsic/enterprise-rag-system"
 PR_NUMBER = 10
 ALERT_NUMBER = 2
+MAIN_REF = "refs/heads/main"
 MAX_ATTEMPTS = 18
 DELAY_SECONDS = 5
 
 
 class VerificationError(Exception):
-    """Alert evidence is unavailable, stale, or ambiguous."""
+    """Security evidence is unavailable, stale, inconsistent, or ambiguous."""
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -64,11 +75,22 @@ def api_get(path: str, token: str) -> object:
         raise VerificationError("Malformed GitHub evidence") from exc
 
 
-def require_identity(repo: str, ref: str, event: str, merge_sha: str) -> None:
-    if repo != REPO or event != "pull_request" or ref != f"refs/pull/{PR_NUMBER}/merge":
-        raise VerificationError("Unexpected repository, event or PR merge ref")
-    if len(merge_sha) != 40 or any(c not in "0123456789abcdef" for c in merge_sha):
-        raise VerificationError("Invalid merge SHA")
+def _valid_sha(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 40
+        and all(c in "0123456789abcdef" for c in value)
+    )
+
+
+def execution_mode(repo: str, ref: str, event: str, sha: str) -> str:
+    if repo != REPO or not _valid_sha(sha):
+        raise VerificationError("Unexpected repository or invalid checked-out commit")
+    if event == "pull_request" and ref == f"refs/pull/{PR_NUMBER}/merge":
+        return "premerge"
+    if event == "push" and ref == MAIN_REF:
+        return "postmerge"
+    raise VerificationError("Unexpected event/ref for CodeQL closure verification")
 
 
 def validate_original_alert(alert: object) -> str:
@@ -78,6 +100,8 @@ def validate_original_alert(alert: object) -> str:
         raise VerificationError("Original alert is not CodeQL")
     if alert.get("state") == "dismissed" or alert.get("dismissed_at") is not None:
         raise VerificationError("Dismissal cannot stand in for remediation")
+    if alert.get("state") not in {"open", "fixed"}:
+        raise VerificationError("Unexpected original alert state")
     location = ((alert.get("most_recent_instance") or {}).get("location") or {})
     if location.get("path") != "scripts/smoke_idp.py":
         raise VerificationError("Original alert path no longer matches TLS fixture")
@@ -87,50 +111,79 @@ def validate_original_alert(alert: object) -> str:
     return rule_id
 
 
-def verify_premerge(
-    alert: object, analyses: object, open_alerts: object,
-    merge_sha: str,
-) -> tuple[str, int]:
-    """A missing fixed instance is NOT a shortcut: require a current CodeQL analysis.
-
-    A clean PR merge ref often has no alert instance at all. Verify an actual
-    CodeQL analysis with the exact merge SHA and non-empty rules, then check
-    every open CodeQL alert for the original vulnerability rule on that ref.
-    """
-    rule_id = validate_original_alert(alert)
-    ref = f"refs/pull/{PR_NUMBER}/merge"
+def latest_current_analysis(analyses: object, ref: str, sha: str) -> dict:
     if not isinstance(analyses, list):
         raise VerificationError("No CodeQL analyses evidence")
     current = [
         a for a in analyses if isinstance(a, dict)
         and a.get("ref") == ref
-        and a.get("commit_sha") == merge_sha
+        and a.get("commit_sha") == sha
         and (a.get("tool") or {}).get("name") == "CodeQL"
     ]
     if not current:
-        raise VerificationError("Exact-merge CodeQL analysis not indexed")
-    if any(
-        a.get("error") or a.get("warning")
-        or not isinstance(a.get("rules_count"), int)
-        or a["rules_count"] <= 0
-        for a in current
+        raise VerificationError("Exact-commit CodeQL analysis not indexed")
+
+    def order_key(row: dict) -> tuple[str, int]:
+        created = row.get("created_at")
+        analysis_id = row.get("id")
+        return (
+            created if isinstance(created, str) else "",
+            analysis_id if isinstance(analysis_id, int) else -1,
+        )
+
+    latest = max(current, key=order_key)
+    if (
+        latest.get("error")
+        or latest.get("warning")
+        or not isinstance(latest.get("rules_count"), int)
+        or latest["rules_count"] <= 0
+        or not isinstance(latest.get("id"), int)
     ):
-        raise VerificationError("Exact-merge CodeQL analysis incomplete or invalid")
+        raise VerificationError("Exact-commit CodeQL analysis incomplete or invalid")
+    return latest
+
+
+def verify_open_alerts(open_alerts: object, ref: str, rule_id: str) -> None:
     if not isinstance(open_alerts, list):
-        raise VerificationError("Missing PR code-scanning alert evidence")
+        raise VerificationError("Missing code-scanning alert evidence")
     for row in open_alerts:
         if not isinstance(row, dict):
-            raise VerificationError("Malformed PR alert")
+            raise VerificationError("Malformed code-scanning alert")
         if row.get("state") != "open":
-            raise VerificationError("PR open-alert query returned unexpected state")
+            raise VerificationError("Open-alert query returned unexpected state")
         instance = row.get("most_recent_instance") or {}
         if instance.get("ref") != ref:
-            raise VerificationError("PR alert evidence is from another ref")
+            raise VerificationError("Alert evidence is from another ref")
         if (row.get("tool") or {}).get("name") != "CodeQL":
             continue
         if (row.get("rule") or {}).get("id") == rule_id:
-            raise VerificationError("Original CodeQL TLS rule still has open PR finding")
-    return rule_id, current[0]["id"]
+            raise VerificationError("Original CodeQL TLS rule still has an open finding")
+
+
+def verify_premerge(
+    alert: object, analyses: object, open_alerts: object, merge_sha: str,
+) -> tuple[str, int]:
+    """Require a complete exact-merge analysis and absence of the original rule."""
+    rule_id = validate_original_alert(alert)
+    ref = f"refs/pull/{PR_NUMBER}/merge"
+    latest = latest_current_analysis(analyses, ref, merge_sha)
+    verify_open_alerts(open_alerts, ref, rule_id)
+    return rule_id, latest["id"]
+
+
+def verify_postmerge(
+    alert: object, analyses: object, open_alerts: object, main_sha: str,
+) -> tuple[str, int, str]:
+    """Require GitHub to have formally fixed alert #2 on the exact main analysis."""
+    rule_id = validate_original_alert(alert)
+    latest = latest_current_analysis(analyses, MAIN_REF, main_sha)
+    if alert.get("state") != "fixed":
+        raise VerificationError("Original CodeQL alert is not formally fixed on main")
+    fixed_at = alert.get("fixed_at")
+    if not isinstance(fixed_at, str) or not fixed_at:
+        raise VerificationError("Fixed CodeQL alert is missing fixed_at evidence")
+    verify_open_alerts(open_alerts, MAIN_REF, rule_id)
+    return rule_id, latest["id"], fixed_at
 
 
 def collect_paginated(base: str, name: str, token: str, params: dict) -> list:
@@ -146,6 +199,18 @@ def collect_paginated(base: str, name: str, token: str, params: dict) -> list:
     raise VerificationError(f"Incomplete code scanning {name} pagination")
 
 
+def verify_main_branch(branch: object, expected_sha: str | None = None) -> None:
+    """Require actual GitHub branch protection, and optionally bind to the main tip."""
+    if not isinstance(branch, dict) or branch.get("name") != "main":
+        raise VerificationError("Missing main branch evidence")
+    if branch.get("protected") is not True:
+        raise VerificationError("main is not protected")
+    if expected_sha is not None:
+        actual = (branch.get("commit") or {}).get("sha")
+        if not _valid_sha(expected_sha) or actual != expected_sha:
+            raise VerificationError("main tip does not match the verified commit")
+
+
 def verify_merge_ancestry(pull: object, commit: object, merge_sha: str) -> None:
     """Bind the checked-out merge tree to the latest base and head commits."""
     if not isinstance(pull, dict) or not isinstance(commit, dict):
@@ -155,36 +220,43 @@ def verify_merge_ancestry(pull: object, commit: object, merge_sha: str) -> None:
         raise VerificationError("PR base/head metadata incomplete")
     expected = [base.get("sha"), head.get("sha")]
     parents = commit.get("parents")
-    if (not all(isinstance(value, str) and len(value) == 40 for value in expected)
-            or commit.get("sha") != merge_sha
-            or not isinstance(parents, list)
-            or [p.get("sha") if isinstance(p, dict) else None for p in parents] != expected):
+    if (
+        not all(_valid_sha(value) for value in expected)
+        or commit.get("sha") != merge_sha
+        or not isinstance(parents, list)
+        or [p.get("sha") if isinstance(p, dict) else None for p in parents] != expected
+    ):
         raise VerificationError("Checked-out merge commit is not current PR base+head merge")
 
 
-def check(token: str, merge_sha: str) -> tuple[str, int]:
+def check_premerge(token: str, merge_sha: str) -> tuple[str, int]:
     base = f"/repos/{REPO}"
     alert = api_get(base + f"/code-scanning/alerts/{ALERT_NUMBER}", token)
     pull = api_get(base + f"/pulls/{PR_NUMBER}", token)
     merge = api_get(base + f"/git/commits/{merge_sha}", token)
+    branch = api_get(base + "/branches/main", token)
+
     verify_merge_ancestry(pull, merge, merge_sha)
-    if (pull.get("number") != PR_NUMBER or pull.get("state") != "open"
-            or (pull.get("base") or {}).get("ref") != "main"
-            or pull.get("merge_commit_sha") not in (None, merge_sha)):
+    if (
+        pull.get("number") != PR_NUMBER
+        or pull.get("state") != "open"
+        or (pull.get("base") or {}).get("ref") != "main"
+        or pull.get("merge_commit_sha") not in (None, merge_sha)
+    ):
         raise VerificationError("Unexpected PR metadata")
+    verify_main_branch(branch, (pull.get("base") or {}).get("sha"))
+
     ref = f"refs/pull/{PR_NUMBER}/merge"
     # CodeQL uploads and GitHub's code-scanning index are eventually consistent.
-    # Retry only a missing exact-head analysis. Never retry a positive finding.
+    # Retry only missing exact-commit analysis. Never retry a positive finding.
     for attempt in range(1, MAX_ATTEMPTS + 1):
         analyses = collect_paginated(
             base, "analyses", token, {"ref": ref, "tool_name": "CodeQL"}
         )
-        # Check readiness before querying the alert list; otherwise an absent
-        # alert list would be a false green when CodeQL never analysed the ref.
         try:
-            verify_premerge(alert, analyses, [], merge_sha)
+            latest_current_analysis(analyses, ref, merge_sha)
         except VerificationError as exc:
-            if "Exact-merge CodeQL analysis not indexed" not in str(exc):
+            if "Exact-commit CodeQL analysis not indexed" not in str(exc):
                 raise
             if attempt == MAX_ATTEMPTS:
                 raise
@@ -198,41 +270,101 @@ def check(token: str, merge_sha: str) -> tuple[str, int]:
     raise VerificationError("CodeQL analysis indexing not completed")
 
 
-def checked_out_merge_sha() -> str:
-    # Actions checkout resolves the actual PR merge ref. GITHUB_SHA describes
-    # the workflow event and is not a substitute for the checked-out tree.
+def check_postmerge(token: str, main_sha: str) -> tuple[str, int, str]:
+    base = f"/repos/{REPO}"
+    branch = api_get(base + "/branches/main", token)
+    verify_main_branch(branch, main_sha)
+
+    # Both the analysis index and fixed-state transition are eventually consistent.
+    # Retry those two propagation states only. Dismissal, malformed evidence, wrong
+    # refs, incomplete analyses, or a persistent positive finding fail closed.
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        analyses = collect_paginated(
+            base, "analyses", token, {"ref": MAIN_REF, "tool_name": "CodeQL"}
+        )
+        try:
+            latest_current_analysis(analyses, MAIN_REF, main_sha)
+        except VerificationError as exc:
+            if "Exact-commit CodeQL analysis not indexed" not in str(exc):
+                raise
+            if attempt == MAX_ATTEMPTS:
+                raise
+            time.sleep(DELAY_SECONDS)
+            continue
+
+        alert = api_get(base + f"/code-scanning/alerts/{ALERT_NUMBER}", token)
+        try:
+            rule_id = validate_original_alert(alert)
+        except VerificationError:
+            raise
+        if alert.get("state") != "fixed":
+            if alert.get("state") != "open" or attempt == MAX_ATTEMPTS:
+                raise VerificationError("Original CodeQL alert is not formally fixed on main")
+            time.sleep(DELAY_SECONDS)
+            continue
+
+        open_alerts = collect_paginated(
+            base, "alerts", token,
+            {"ref": MAIN_REF, "tool_name": "CodeQL", "state": "open"},
+        )
+        result = verify_postmerge(alert, analyses, open_alerts, main_sha)
+        if result[0] != rule_id:
+            raise VerificationError("Original CodeQL rule identity changed during verification")
+        return result
+    raise VerificationError("CodeQL fixed-state indexing not completed")
+
+
+# Backwards-compatible name used by existing callers/tests.
+check = check_premerge
+
+
+def checked_out_commit_sha() -> str:
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"], check=True, text=True,
             capture_output=True, timeout=10,
         )
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        raise VerificationError("Cannot resolve checked-out PR merge commit") from exc
+        raise VerificationError("Cannot resolve checked-out commit") from exc
     sha = result.stdout.strip()
-    if len(sha) != 40 or any(c not in "0123456789abcdef" for c in sha):
-        raise VerificationError("Invalid checked-out PR merge commit SHA")
+    if not _valid_sha(sha):
+        raise VerificationError("Invalid checked-out commit SHA")
     return sha
+
+
+# Backwards-compatible name used by existing tests.
+checked_out_merge_sha = checked_out_commit_sha
 
 
 def main() -> int:
     try:
-        merge_sha = checked_out_merge_sha()
-        require_identity(
+        sha = checked_out_commit_sha()
+        mode = execution_mode(
             os.environ.get("GITHUB_REPOSITORY", ""),
             os.environ.get("GITHUB_REF", ""),
             os.environ.get("GITHUB_EVENT_NAME", ""),
-            merge_sha,
+            sha,
         )
         token = os.environ.get("GH_TOKEN", "")
         if not token:
             raise VerificationError("Missing read-only GitHub Actions token")
-        rule_id, analysis_id = check(token, merge_sha)
+        if mode == "premerge":
+            rule_id, analysis_id = check_premerge(token, sha)
+            print(
+                f"VERIFIED: main is protected and original CodeQL rule {rule_id} "
+                f"has no open finding on exact PR merge analysis {analysis_id} ({sha}). "
+                "Default-branch alert closure remains a post-merge gate."
+            )
+        else:
+            rule_id, analysis_id, fixed_at = check_postmerge(token, sha)
+            print(
+                f"VERIFIED: main is protected; original CodeQL alert #{ALERT_NUMBER} "
+                f"for rule {rule_id} is formally fixed at {fixed_at}; exact main "
+                f"analysis {analysis_id} covers {sha}; no open finding for that rule remains."
+            )
     except VerificationError as exc:
         print(f"NOT VERIFIED: {exc}", file=sys.stderr)
         return 1
-    print(f"VERIFIED: original CodeQL rule {rule_id} has no open finding on "
-          f"the exact PR merge analysis {analysis_id} ({merge_sha}). "
-          "Default-branch alert closure remains a post-merge gate.")
     return 0
 
 
