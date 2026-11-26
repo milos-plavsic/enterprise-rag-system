@@ -2,13 +2,6 @@ name: Base image evaluation (non-release)
 on:
   pull_request:
     branches: [main]
-    paths:
-      - Dockerfile
-      - Dockerfile.candidate
-      - requirements-runtime.lock
-      - .github/workflows/base-evaluation.yml
-      - scripts/deployment_smoke.py
-      - scripts/check_image_scan.py
   workflow_dispatch:
 permissions:
   contents: read
