@@ -182,7 +182,7 @@ def check(token: str, merge_sha: str) -> tuple[str, int]:
         # Check readiness before querying the alert list; otherwise an absent
         # alert list would be a false green when CodeQL never analysed the ref.
         try:
-            analysis = verify_premerge(alert, analyses, [], merge_sha)
+            verify_premerge(alert, analyses, [], merge_sha)
         except VerificationError as exc:
             if "Exact-merge CodeQL analysis not indexed" not in str(exc):
                 raise

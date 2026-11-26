@@ -1,165 +1,222 @@
-"""CodeQL alert read-only proof: ensure failures cannot produce false approval."""
+"""Fail-closed tests for exact-merge CodeQL analysis and original TLS rule."""
 from unittest import TestCase, mock
 
 from scripts import verify_codeql_alert_2 as q
 
-SHA = "a" * 40
-
-
-def merge_fixture():
-    return {"sha": SHA, "parents": [{"sha": "b" * 40}, {"sha": "c" * 40}]}
+MERGE = "a" * 40
+BASE = "b" * 40
+HEAD = "c" * 40
+REF = "refs/pull/10/merge"
+RULE = "py/insecure-protocol"
 
 
 def fixture():
-    return (
-        {"number": 2, "tool": {"name": "CodeQL"}, "state": "open",
-         "dismissed_at": None,
-         "most_recent_instance": {"location": {"path": "scripts/smoke_idp.py"}}},
-        [{"ref": "refs/pull/10/merge", "state": "fixed", "commit_sha": SHA}],
-        {"number": 10, "merge_commit_sha": SHA, "state": "open",
-         "base": {"ref": "main", "sha": "b" * 40}, "head": {"sha": "c" * 40}},
-    )
+    original = {
+        "number": 2, "tool": {"name": "CodeQL"}, "rule": {"id": RULE},
+        "state": "open", "dismissed_at": None,
+        "most_recent_instance": {"location": {"path": "scripts/smoke_idp.py"}},
+    }
+    current = [{
+        "ref": REF, "commit_sha": MERGE, "tool": {"name": "CodeQL"},
+        "error": "", "warning": "", "rules_count": 320, "id": 9001,
+    }]
+    pull = {
+        "number": 10, "merge_commit_sha": None, "state": "open",
+        "base": {"ref": "main", "sha": BASE}, "head": {"sha": HEAD},
+    }
+    merge = {"sha": MERGE, "parents": [{"sha": BASE}, {"sha": HEAD}]}
+    return original, current, pull, merge
 
 
-class TestCodeQLProof(TestCase):
-    def test_fixed(self):
-        q.verify(*fixture(), SHA)
+class TestCodeQLPremergeProof(TestCase):
+    def test_positive_clean_analysis(self):
+        alert, analyses, _, _ = fixture()
+        self.assertEqual(q.verify_premerge(alert, analyses, [], MERGE),
+                         (RULE, 9001))
 
-    def test_no_instance(self):
-        a, rows, p = fixture()
+    def test_missing_current_analysis_fails(self):
+        alert, _, _, _ = fixture()
         with self.assertRaises(q.VerificationError):
-            q.verify(a, [], p, SHA)
+            q.verify_premerge(alert, [], [], MERGE)
 
-    def test_open_not_fixed(self):
-        a, rows, p = fixture()
-        rows[0]["state"] = "open"
+    def test_stale_analysis_fails(self):
+        alert, analyses, _, _ = fixture()
+        analyses[0]["commit_sha"] = HEAD
         with self.assertRaises(q.VerificationError):
-            q.verify(a, rows, p, SHA)
+            q.verify_premerge(alert, analyses, [], MERGE)
 
-    def test_dismissal_not_fixed(self):
-        a, rows, p = fixture()
-        a["state"] = "dismissed"
+    def test_wrong_analysis_ref_fails(self):
+        alert, analyses, _, _ = fixture()
+        analyses[0]["ref"] = "refs/heads/main"
         with self.assertRaises(q.VerificationError):
-            q.verify(a, rows, p, SHA)
+            q.verify_premerge(alert, analyses, [], MERGE)
 
-    def test_dismissal_timestamp_not_fixed(self):
-        a, rows, p = fixture()
-        a["dismissed_at"] = "2026-01-01T00:00:00Z"
+    def test_wrong_analysis_tool_fails(self):
+        alert, analyses, _, _ = fixture()
+        analyses[0]["tool"]["name"] = "OtherScanner"
         with self.assertRaises(q.VerificationError):
-            q.verify(a, rows, p, SHA)
+            q.verify_premerge(alert, analyses, [], MERGE)
 
-    def test_wrong_tool(self):
-        a, rows, p = fixture()
-        a["tool"]["name"] = "other"
+    def test_empty_rules_count_fails(self):
+        alert, analyses, _, _ = fixture()
+        analyses[0]["rules_count"] = 0
         with self.assertRaises(q.VerificationError):
-            q.verify(a, rows, p, SHA)
+            q.verify_premerge(alert, analyses, [], MERGE)
 
-    def test_wrong_alert(self):
-        a, rows, p = fixture()
-        a["number"] = 3
+    def test_analysis_error_fails(self):
+        alert, analyses, _, _ = fixture()
+        analyses[0]["error"] = "SARIF invalid"
         with self.assertRaises(q.VerificationError):
-            q.verify(a, rows, p, SHA)
+            q.verify_premerge(alert, analyses, [], MERGE)
 
-    def test_wrong_file(self):
-        a, rows, p = fixture()
-        a["most_recent_instance"]["location"]["path"] = "wrong.py"
+    def test_matching_open_alert_fails_even_if_file_moved(self):
+        alert, analyses, _, _ = fixture()
+        opened = [{
+            "state": "open", "rule": {"id": RULE},
+            "tool": {"name": "CodeQL"},
+            "most_recent_instance": {"ref": REF, "location": {"path": "elsewhere.py"}},
+        }]
         with self.assertRaises(q.VerificationError):
-            q.verify(a, rows, p, SHA)
+            q.verify_premerge(alert, analyses, opened, MERGE)
 
-    def test_stale_merge(self):
-        a, rows, p = fixture()
-        p["merge_commit_sha"] = "b" * 40
+    def test_unrelated_rule_does_not_claim_tls_failure(self):
+        alert, analyses, _, _ = fixture()
+        unrelated = [{
+            "state": "open", "rule": {"id": "py/unrelated"},
+            "tool": {"name": "CodeQL"},
+            "most_recent_instance": {"ref": REF},
+        }]
+        self.assertEqual(q.verify_premerge(alert, analyses, unrelated, MERGE),
+                         (RULE, 9001))
+
+    def test_open_alert_wrong_ref_fails(self):
+        alert, analyses, _, _ = fixture()
+        wrong = [{
+            "state": "open", "rule": {"id": "py/unrelated"},
+            "tool": {"name": "CodeQL"},
+            "most_recent_instance": {"ref": "refs/heads/main"},
+        }]
         with self.assertRaises(q.VerificationError):
-            q.verify(a, rows, p, SHA)
+            q.verify_premerge(alert, analyses, wrong, MERGE)
 
-    def test_stale_instance(self):
-        a, rows, p = fixture()
-        rows[0]["commit_sha"] = "b" * 40
+    def test_original_dismissal_is_not_remediation(self):
+        alert, analyses, _, _ = fixture()
+        alert["state"] = "dismissed"
         with self.assertRaises(q.VerificationError):
-            q.verify(a, rows, p, SHA)
+            q.verify_premerge(alert, analyses, [], MERGE)
 
-    def test_open_and_fixed_ambiguous(self):
-        a, rows, p = fixture()
-        rows.append({"ref": "refs/pull/10/merge", "state": "open",
-                     "commit_sha": SHA})
+    def test_missing_original_rule_fails(self):
+        alert, analyses, _, _ = fixture()
+        alert["rule"] = {}
         with self.assertRaises(q.VerificationError):
-            q.verify(a, rows, p, SHA)
+            q.verify_premerge(alert, analyses, [], MERGE)
 
-    def test_wrong_base(self):
-        a, rows, p = fixture()
-        p["base"]["ref"] = "other"
+    def test_wrong_original_source_fails(self):
+        alert, analyses, _, _ = fixture()
+        alert["most_recent_instance"]["location"]["path"] = "not_fixture.py"
         with self.assertRaises(q.VerificationError):
-            q.verify(a, rows, p, SHA)
+            q.verify_premerge(alert, analyses, [], MERGE)
 
-    def test_reject_wrong_execution_context(self):
-        for row in (
-            ("other/repo", "refs/pull/10/merge", "pull_request", SHA),
-            (q.REPO, "refs/heads/main", "pull_request", SHA),
-            (q.REPO, "refs/pull/10/merge", "push", SHA),
-            (q.REPO, "refs/pull/10/merge", "pull_request", "broken"),
-        ):
+    def test_correct_merge_ancestry(self):
+        _, _, pull, merge = fixture()
+        q.verify_merge_ancestry(pull, merge, MERGE)
+
+    def test_invalid_merge_ancestry_fails(self):
+        _, _, pull, merge = fixture()
+        merge["parents"][1]["sha"] = "d" * 40
+        with self.assertRaises(q.VerificationError):
+            q.verify_merge_ancestry(pull, merge, MERGE)
+
+    def test_wrong_merge_sha_fails(self):
+        _, _, pull, merge = fixture()
+        merge["sha"] = "d" * 40
+        with self.assertRaises(q.VerificationError):
+            q.verify_merge_ancestry(pull, merge, MERGE)
+
+    def test_reject_unexpected_execution_context(self):
+        for args in [
+            ("someone/else", REF, "pull_request", MERGE),
+            (q.REPO, "refs/heads/main", "pull_request", MERGE),
+            (q.REPO, REF, "push", MERGE),
+            (q.REPO, REF, "pull_request", "invalid"),
+        ]:
             with self.assertRaises(q.VerificationError):
-                q.require_identity(*row)
+                q.require_identity(*args)
 
-    def test_retry_only_eventual_consistency(self):
-        a, rows, p = fixture()
-        with mock.patch.object(q, "api_get", side_effect=[a, p, merge_fixture(), [], rows]), \
-             mock.patch.object(q.time, "sleep") as sleep:
-            q.check("fake", SHA)
+    def test_paginated_query_reads_to_end(self):
+        rows = [{"state": "open"}] * 101
+        with mock.patch.object(q, "api_get", side_effect=[rows[:100], rows[100:]]) as get:
+            self.assertEqual(
+                q.collect_paginated(f"/repos/{q.REPO}", "alerts", "fake", {}),
+                rows,
+            )
+            self.assertEqual(get.call_count, 2)
+
+    def test_paginated_query_fails_on_malformed(self):
+        with mock.patch.object(q, "api_get", return_value={"bad": "data"}):
+            with self.assertRaises(q.VerificationError):
+                q.collect_paginated(f"/repos/{q.REPO}", "analyses", "fake", {})
+
+    def test_full_check_success(self):
+        alert, analyses, pull, merge = fixture()
+        with mock.patch.object(
+            q, "api_get", side_effect=[alert, pull, merge, analyses, []]
+        ):
+            self.assertEqual(q.check("fake", MERGE), (RULE, 9001))
+
+    def test_full_check_eventual_indexing(self):
+        alert, analyses, pull, merge = fixture()
+        with mock.patch.object(
+            q, "api_get", side_effect=[alert, pull, merge, [], analyses, []]
+        ), mock.patch.object(q.time, "sleep") as sleep:
+            self.assertEqual(q.check("fake", MERGE), (RULE, 9001))
             sleep.assert_called_once_with(q.DELAY_SECONDS)
 
-    def test_do_not_retry_auth_denial(self):
-        with mock.patch.object(q, "api_get",
-                               side_effect=q.VerificationError("HTTP 403")) as get, \
-             mock.patch.object(q.time, "sleep") as sleep:
+    def test_full_check_does_not_retry_positive_finding(self):
+        alert, analyses, pull, merge = fixture()
+        finding = [{
+            "state": "open", "rule": {"id": RULE}, "tool": {"name": "CodeQL"},
+            "most_recent_instance": {"ref": REF},
+        }]
+        with mock.patch.object(
+            q, "api_get", side_effect=[alert, pull, merge, analyses, finding]
+        ), mock.patch.object(q.time, "sleep") as sleep:
             with self.assertRaises(q.VerificationError):
-                q.check("fake", SHA)
-            get.assert_called_once()
+                q.check("fake", MERGE)
             sleep.assert_not_called()
 
-    def test_incomplete_pagination(self):
-        a, rows, p = fixture()
-        with mock.patch.object(q, "api_get",
-                               side_effect=[a, p, merge_fixture(), rows * 100]):
+    def test_full_check_rejects_wrong_base(self):
+        alert, analyses, pull, merge = fixture()
+        pull["base"]["ref"] = "develop"
+        with mock.patch.object(q, "api_get", side_effect=[alert, pull, merge]):
             with self.assertRaises(q.VerificationError):
-                q.check("fake", SHA)
+                q.check("fake", MERGE)
 
-    def test_api_path_escape_rejected(self):
+    def test_permission_denied_fails_without_retry(self):
+        with mock.patch.object(
+            q, "api_get", side_effect=q.VerificationError("HTTP 403")
+        ) as getter, mock.patch.object(q.time, "sleep") as sleep:
+            with self.assertRaises(q.VerificationError):
+                q.check("fake", MERGE)
+            getter.assert_called_once()
+            sleep.assert_not_called()
+
+    def test_api_origin_path_escape_rejected(self):
         with self.assertRaises(q.VerificationError):
-            q.api_get("/another/endpoint", "fake")
+            q.api_get("/not-allowed", "fake")
 
-    def test_redirect_is_rejected(self):
+    def test_redirect_refused(self):
         with self.assertRaises(q.VerificationError):
-            q.NoRedirect().redirect_request(None, None, 302, "", {}, "http://wrong.test")
+            q.NoRedirect().redirect_request(None, None, 302, "", {}, "http://bad.test")
 
-    def test_checkout_merge_commit_used(self):
+    def test_checked_out_merge_sha(self):
         with mock.patch.object(q.subprocess, "run") as runner:
-            runner.return_value.stdout = SHA + chr(10)
-            self.assertEqual(q.checked_out_merge_sha(), SHA)
+            runner.return_value.stdout = MERGE + chr(10)
+            self.assertEqual(q.checked_out_merge_sha(), MERGE)
             runner.assert_called_once()
 
-    def test_malformed_checkout_merge_commit_rejected(self):
+    def test_bad_checkout_merge_sha_fails(self):
         with mock.patch.object(q.subprocess, "run") as runner:
-            runner.return_value.stdout = "invalid-sha"
+            runner.return_value.stdout = "bad-sha"
             with self.assertRaises(q.VerificationError):
                 q.checked_out_merge_sha()
-
-    def test_null_api_merge_with_valid_ancestry(self):
-        alert, rows, pull = fixture()
-        pull["merge_commit_sha"] = None
-        q.verify(alert, rows, pull, SHA)
-        q.verify_merge_ancestry(pull, merge_fixture(), SHA)
-
-    def test_merge_parent_mismatch_rejected(self):
-        _, _, pull = fixture()
-        merge = merge_fixture()
-        merge["parents"][1]["sha"] = "f" * 40
-        with self.assertRaises(q.VerificationError):
-            q.verify_merge_ancestry(pull, merge, SHA)
-
-    def test_wrong_merge_object_sha_rejected(self):
-        _, _, pull = fixture()
-        merge = merge_fixture()
-        merge["sha"] = "f" * 40
-        with self.assertRaises(q.VerificationError):
-            q.verify_merge_ancestry(pull, merge, SHA)
