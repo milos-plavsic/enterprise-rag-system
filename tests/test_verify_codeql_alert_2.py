@@ -28,6 +28,10 @@ def fixture():
     return original, current, pull, merge
 
 
+def protected_branch(sha=BASE):
+    return {"name": "main", "protected": True, "commit": {"sha": sha}}
+
+
 class TestCodeQLPremergeProof(TestCase):
     def test_positive_clean_analysis(self):
         alert, analyses, _, _ = fixture()
@@ -160,14 +164,14 @@ class TestCodeQLPremergeProof(TestCase):
     def test_full_check_success(self):
         alert, analyses, pull, merge = fixture()
         with mock.patch.object(
-            q, "api_get", side_effect=[alert, pull, merge, analyses, []]
+            q, "api_get", side_effect=[alert, pull, merge, protected_branch(), analyses, []]
         ):
             self.assertEqual(q.check("fake", MERGE), (RULE, 9001))
 
     def test_full_check_eventual_indexing(self):
         alert, analyses, pull, merge = fixture()
         with mock.patch.object(
-            q, "api_get", side_effect=[alert, pull, merge, [], analyses, []]
+            q, "api_get", side_effect=[alert, pull, merge, protected_branch(), [], analyses, []]
         ), mock.patch.object(q.time, "sleep") as sleep:
             self.assertEqual(q.check("fake", MERGE), (RULE, 9001))
             sleep.assert_called_once_with(q.DELAY_SECONDS)
@@ -179,7 +183,7 @@ class TestCodeQLPremergeProof(TestCase):
             "most_recent_instance": {"ref": REF},
         }]
         with mock.patch.object(
-            q, "api_get", side_effect=[alert, pull, merge, analyses, finding]
+            q, "api_get", side_effect=[alert, pull, merge, protected_branch(), analyses, finding]
         ), mock.patch.object(q.time, "sleep") as sleep:
             with self.assertRaises(q.VerificationError):
                 q.check("fake", MERGE)
@@ -188,7 +192,7 @@ class TestCodeQLPremergeProof(TestCase):
     def test_full_check_rejects_wrong_base(self):
         alert, analyses, pull, merge = fixture()
         pull["base"]["ref"] = "develop"
-        with mock.patch.object(q, "api_get", side_effect=[alert, pull, merge]):
+        with mock.patch.object(q, "api_get", side_effect=[alert, pull, merge, protected_branch()]):
             with self.assertRaises(q.VerificationError):
                 q.check("fake", MERGE)
 
@@ -220,3 +224,101 @@ class TestCodeQLPremergeProof(TestCase):
             runner.return_value.stdout = "bad-sha"
             with self.assertRaises(q.VerificationError):
                 q.checked_out_merge_sha()
+
+    def test_main_branch_must_be_protected(self):
+        with self.assertRaises(q.VerificationError):
+            q.verify_main_branch({"name": "main", "protected": False, "commit": {"sha": BASE}})
+
+    def test_main_branch_tip_is_bound(self):
+        q.verify_main_branch(protected_branch(), BASE)
+        with self.assertRaises(q.VerificationError):
+            q.verify_main_branch(protected_branch(HEAD), BASE)
+
+    def test_postmerge_execution_context(self):
+        self.assertEqual(q.execution_mode(q.REPO, q.MAIN_REF, "push", MERGE), "postmerge")
+
+    def test_postmerge_fixed_alert_success(self):
+        alert, _, _, _ = fixture()
+        alert["state"] = "fixed"
+        alert["fixed_at"] = "2026-11-26T12:00:00Z"
+        analyses = [{
+            "ref": q.MAIN_REF, "commit_sha": MERGE, "tool": {"name": "CodeQL"},
+            "error": "", "warning": "", "rules_count": 320, "id": 9002,
+            "created_at": "2026-11-26T12:00:00Z",
+        }]
+        self.assertEqual(
+            q.verify_postmerge(alert, analyses, [], MERGE),
+            (RULE, 9002, "2026-11-26T12:00:00Z"),
+        )
+
+    def test_postmerge_open_state_is_not_formal_closure(self):
+        alert, _, _, _ = fixture()
+        analyses = [{
+            "ref": q.MAIN_REF, "commit_sha": MERGE, "tool": {"name": "CodeQL"},
+            "error": "", "warning": "", "rules_count": 320, "id": 9002,
+        }]
+        with self.assertRaises(q.VerificationError):
+            q.verify_postmerge(alert, analyses, [], MERGE)
+
+    def test_postmerge_fixed_state_requires_fixed_at(self):
+        alert, _, _, _ = fixture()
+        alert["state"] = "fixed"
+        alert["fixed_at"] = None
+        analyses = [{
+            "ref": q.MAIN_REF, "commit_sha": MERGE, "tool": {"name": "CodeQL"},
+            "error": "", "warning": "", "rules_count": 320, "id": 9002,
+        }]
+        with self.assertRaises(q.VerificationError):
+            q.verify_postmerge(alert, analyses, [], MERGE)
+
+    def test_postmerge_recurrence_of_original_rule_fails(self):
+        alert, _, _, _ = fixture()
+        alert["state"] = "fixed"
+        alert["fixed_at"] = "2026-11-26T12:00:00Z"
+        analyses = [{
+            "ref": q.MAIN_REF, "commit_sha": MERGE, "tool": {"name": "CodeQL"},
+            "error": "", "warning": "", "rules_count": 320, "id": 9002,
+        }]
+        opened = [{
+            "state": "open", "rule": {"id": RULE}, "tool": {"name": "CodeQL"},
+            "most_recent_instance": {"ref": q.MAIN_REF},
+        }]
+        with self.assertRaises(q.VerificationError):
+            q.verify_postmerge(alert, analyses, opened, MERGE)
+
+    def test_full_postmerge_check_success(self):
+        alert, _, _, _ = fixture()
+        alert["state"] = "fixed"
+        alert["fixed_at"] = "2026-11-26T12:00:00Z"
+        analyses = [{
+            "ref": q.MAIN_REF, "commit_sha": MERGE, "tool": {"name": "CodeQL"},
+            "error": "", "warning": "", "rules_count": 320, "id": 9002,
+        }]
+        with mock.patch.object(
+            q, "api_get",
+            side_effect=[protected_branch(MERGE), analyses, alert, []],
+        ):
+            self.assertEqual(
+                q.check_postmerge("fake", MERGE),
+                (RULE, 9002, "2026-11-26T12:00:00Z"),
+            )
+
+    def test_full_postmerge_check_retries_open_to_fixed_transition(self):
+        alert, _, _, _ = fixture()
+        fixed = dict(alert)
+        fixed["state"] = "fixed"
+        fixed["fixed_at"] = "2026-11-26T12:00:00Z"
+        analyses = [{
+            "ref": q.MAIN_REF, "commit_sha": MERGE, "tool": {"name": "CodeQL"},
+            "error": "", "warning": "", "rules_count": 320, "id": 9002,
+        }]
+        with mock.patch.object(
+            q, "api_get",
+            side_effect=[protected_branch(MERGE), analyses, alert, analyses, fixed, []],
+        ), mock.patch.object(q.time, "sleep") as sleep:
+            self.assertEqual(
+                q.check_postmerge("fake", MERGE),
+                (RULE, 9002, "2026-11-26T12:00:00Z"),
+            )
+            sleep.assert_called_once_with(q.DELAY_SECONDS)
+
