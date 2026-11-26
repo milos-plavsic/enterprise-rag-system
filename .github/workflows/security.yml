@@ -41,7 +41,7 @@ jobs:
       - uses: github/codeql-action/analyze@5895b2c9be147bc7f1c75ce72c5cb577febb1907 # v4
 
   codeql_original_alert:
-    name: CodeQL alert #2 fixed on PR
+    name: CodeQL alert #2 remediated in PR
     needs: codeql
     if: github.event_name == 'pull_request' && github.event.pull_request.number == 10
     runs-on: ubuntu-latest
@@ -56,7 +56,7 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
-      - name: Verify original CodeQL alert instance on exact PR merge SHA
+      - name: Verify original TLS rule absent in exact PR CodeQL analysis
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/verify_codeql_alert_2.py

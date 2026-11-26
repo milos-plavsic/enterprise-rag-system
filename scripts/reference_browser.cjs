@@ -5,6 +5,7 @@ const { spawnSync } = require('node:child_process');
 const https = require('node:https');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const os = require('node:os');
 
 const directory = process.env.RAG_LAB_PATH;
 const origin = 'http://localhost:8000';
@@ -254,6 +255,33 @@ const search = async page => {
   await page.getByRole('button', {name:'Search',exact:true}).click();
 };
 
+// Docker attaches/removes veth pairs asynchronously. Chromium's network-change
+// notifier may interrupt a credential POST *after* a successful HTTP preflight.
+// Launch only once the host's interface/route state has remained unchanged.
+function hostNetworkFingerprint() {
+  const interfaces = os.networkInterfaces();
+  const rows = Object.keys(interfaces).sort().map(name =>
+    [name, (interfaces[name] || []).map(a =>
+      [a.address, a.netmask, a.internal, a.family]).sort()]);
+  const routes = readFileSync('/proc/net/route','utf8');
+  return JSON.stringify([rows,routes]);
+}
+async function waitForStableHostNetwork(quietMs = 3500, timeoutMs = 30000) {
+  const until = Date.now() + timeoutMs;
+  let fingerprint = hostNetworkFingerprint();
+  let stableSince = Date.now();
+  while (Date.now() < until) {
+    await new Promise(resolve => setTimeout(resolve,300));
+    const next = hostNetworkFingerprint();
+    if (next !== fingerprint) {
+      fingerprint = next;
+      stableSince = Date.now();
+    }
+    if (Date.now() - stableSince >= quietMs) return;
+  }
+  throw Error('Host network topology did not stabilise after Docker operations.');
+}
+
 async function waitForBrowserNetwork(context, timeoutMs = 45000) {
   const discovery = idpOrigin + idpRealm + '/.well-known/openid-configuration';
   const until = Date.now() + timeoutMs;
@@ -264,8 +292,15 @@ async function waitForBrowserNetwork(context, timeoutMs = 45000) {
       const identity = await probePage.goto(discovery,{waitUntil:'domcontentloaded',timeout:5000});
       const application = await probePage.goto(origin + '/ready',
         {waitUntil:'domcontentloaded',timeout:5000});
-      consecutive = identity?.status() === 200 && application?.status() === 200
-        ? consecutive + 1 : 0;
+      let authReady = false;
+      if (identity?.status() === 200 && application?.status() === 200) {
+        await probePage.goto(origin + '/reference/',
+          {waitUntil:'domcontentloaded',timeout:5000});
+        await probePage.getByRole('button',{name:'Sign in'}).click({timeout:5000});
+        await probePage.locator('#username').waitFor({state:'visible',timeout:5000});
+        authReady = isIdpAuth(new URL(probePage.url()));
+      }
+      consecutive = authReady ? consecutive + 1 : 0;
     } catch {
       // Only pre-authentication readiness is retried. All credential posts,
       // token exchanges, authorization responses and security checks stay strict.
@@ -290,6 +325,7 @@ async function waitForBrowserNetwork(context, timeoutMs = 45000) {
     // There are no credential or authorization retries.
     const fresh = async () => {
       if (browser) await browser.close();
+      await waitForStableHostNetwork();
       browser = await chromium.launch(options);
       // The lab uses a disposable local certificate. curl checks its exact CA separately.
       const context = await browser.newContext({ignoreHTTPSErrors:true});
