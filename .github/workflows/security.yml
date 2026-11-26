@@ -41,7 +41,7 @@ jobs:
       - uses: github/codeql-action/analyze@5895b2c9be147bc7f1c75ce72c5cb577febb1907 # v4
 
   codeql_original_alert:
-    name: CodeQL alert #2 remediated in PR
+    name: "CodeQL alert #2 remediated in PR"
     needs: codeql
     if: github.event_name == 'pull_request' && github.event.pull_request.number == 10
     runs-on: ubuntu-latest
@@ -62,7 +62,7 @@ jobs:
         run: python3 scripts/verify_codeql_alert_2.py
 
   codeql_original_alert_main:
-    name: CodeQL alert #2 fixed on main
+    name: "CodeQL alert #2 fixed on main"
     needs: codeql
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
