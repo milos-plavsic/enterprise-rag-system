@@ -61,3 +61,20 @@ def test_permission_change_fails():
     fs["a.py"][2] = 493
     with pytest.raises(ValueError, match="effective_filesystem"):
         verify_baseline(elf, source, identity, baseline, fs)
+
+@pytest.mark.parametrize("name", [
+    "usr/local/lib/python3.12/site-packages/pkg/__pycache__/module.pyc",
+    "usr/local/lib/python3.12/site-packages/pkg/module.pyo",
+])
+def test_compiled_install_bytecode_fails_even_if_other_sources_match(name):
+    elf, sources, identity, baseline, fs = fixture()
+    fs[name] = ["file", "unreviewed native bytecode", 420, 0, 0]
+    with pytest.raises(ValueError, match="bytecode"):
+        verify_baseline(elf, sources, identity, baseline, fs)
+
+
+def test_apk_log_is_rejected():
+    elf, sources, identity, baseline, fs = fixture()
+    fs["var/log/apk.log"] = ["file", "arbitrary install log", 420, 0, 0]
+    with pytest.raises(ValueError, match="APK installation log"):
+        verify_baseline(elf, sources, identity, baseline, fs)

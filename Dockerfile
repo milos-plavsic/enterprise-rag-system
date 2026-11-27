@@ -16,7 +16,7 @@ ADD --checksum=sha256:18c5778cbe52e1991303f8531970b05d4e6e036ea08349322f7422f42a
 RUN apk verify /tmp/libcrypto3.apk /tmp/libssl3.apk \
     && apk add --no-network --no-cache /tmp/libcrypto3.apk /tmp/libssl3.apk \
     && apk info -e 'libcrypto3=3.5.9-r1' 'libssl3=3.5.9-r1' \
-    && rm /tmp/libcrypto3.apk /tmp/libssl3.apk
+    && rm /tmp/libcrypto3.apk /tmp/libssl3.apk /var/log/apk.log
 
 FROM patched
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 RAG_PROFILE=production
@@ -25,7 +25,9 @@ RUN addgroup -S -g 10001 appuser \
     && adduser -S -D -H -u 10001 -G appuser appuser \
     && install -d -o appuser -g appuser -m 0700 /var/lib/rag /run/rag-parser
 COPY requirements-runtime.lock .
-RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes -r requirements-runtime.lock
+RUN python -m pip install --no-cache-dir --no-compile --only-binary=:all: --require-hashes -r requirements-runtime.lock \
+    && find /usr/local/lib/python3.12/site-packages -type f -name '*.pyc' -delete \
+    && find /usr/local/lib/python3.12/site-packages -type d -name '__pycache__' -empty -delete
 COPY app/ app/
 COPY identity_policy.py disaster_recovery.py document_source.py reference_ranking.py reference_answer.py auth_oidc.py pdf_worker.py pdf_transport.py pdf_daemon.py production_admin.py production_store.py production_runtime.py query_intent.py rag_service.py ./
 USER 10001:10001
