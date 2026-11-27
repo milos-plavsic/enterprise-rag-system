@@ -116,3 +116,11 @@ def test_gate_rejects_unrecognized_severity(tmp_path):
     path.write_text(json.dumps(report(match(severity="typo"))), encoding="utf-8")
     with pytest.raises(ValueError, match="unrecognized scanner severity"):
         release_gate(path)
+
+
+def test_comparative_scan_cannot_waive_sqlite_without_runtime_evidence(tmp_path):
+    row = match(ident="CVE-2026-119586", name="sqlite-libs")
+    row["artifact"]["version"] = "3.54.1-r0"
+    path = tmp_path / "scan.json"
+    path.write_text(json.dumps(report(row)), encoding="utf-8")
+    assert release_gate(path) == 1

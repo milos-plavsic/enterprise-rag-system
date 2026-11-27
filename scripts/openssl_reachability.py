@@ -150,6 +150,7 @@ def main() -> None:
     if not package_ok or not openssl_version.startswith("OpenSSL 3.5.9 "):
         raise RuntimeError("runtime OpenSSL package/version drift")
 
+    sqlite_package_ok = exact_apk("sqlite-libs", "3.54.1-r0")
     invariants = {
         "no_quic_stack": (
             not quic_packages and not markers["quic"] and not markers["native"]
@@ -173,7 +174,7 @@ def main() -> None:
             and not markers["native"]
         ),
         "sqlite_cli_absent": shutil.which("sqlite3") is None,
-        "sqlite_runtime_patched": tuple(map(int, sqlite_version.split("."))) >= (3, 54, 1),
+        "sqlite_runtime_patched": sqlite_package_ok and tuple(map(int, sqlite_version.split("."))) >= (3, 54, 1),
     }
     failed = sorted(name for name, value in invariants.items() if not value)
 
@@ -186,7 +187,8 @@ def main() -> None:
         "sqlite": sqlite_version,
         "image_user": config.get("User"),
         "image_command": command,
-        "packages": {"libcrypto3": "3.5.9-r1", "libssl3": "3.5.9-r1"},
+        "packages": {"libcrypto3": "3.5.9-r1", "libssl3": "3.5.9-r1",
+                     "sqlite-libs": "3.54.1-r0" if sqlite_package_ok else None},
         "python_ssl_api_markers": ssl_api,
         "quic_packages": quic_packages,
         "source_markers": markers,

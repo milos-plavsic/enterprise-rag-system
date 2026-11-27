@@ -144,6 +144,14 @@ def _trivy_rows(report: dict) -> list[dict]:
     return rows
 
 
+def sqlite_disposition_supported(evidence: dict) -> bool:
+    return (
+        evidence.get("packages", {}).get("sqlite-libs") == "3.54.1-r0"
+        and evidence.get("invariants", {}).get("sqlite_cli_absent") is True
+        and evidence.get("invariants", {}).get("sqlite_runtime_patched") is True
+    )
+
+
 def evaluate(grype: dict, trivy: dict, evidence: dict, policy: dict, identity: dict) -> dict:
     dispositions, packages = _policy(policy, evidence)
     verify_evidence_binding(evidence, policy, identity)
@@ -161,10 +169,7 @@ def evaluate(grype: dict, trivy: dict, evidence: dict, policy: dict, identity: d
     if trivy.get("Metadata", {}).get("ImageID") != config:
         raise ValueError("Trivy identity mismatch")
 
-    sqlite_ok = (
-        evidence.get("invariants", {}).get("sqlite_cli_absent") is True
-        and evidence.get("invariants", {}).get("sqlite_runtime_patched") is True
-    )
+    sqlite_ok = sqlite_disposition_supported(evidence)
     resolved, unresolved = [], []
     for row in _grype_rows(grype) + _trivy_rows(trivy):
         exact_sqlite = (
@@ -177,7 +182,7 @@ def evaluate(grype: dict, trivy: dict, evidence: dict, policy: dict, identity: d
             and row["type"] == policy["component"]["type"]
         )
         if exact_sqlite and sqlite_ok:
-            resolved.append({**row, "disposition": "not_affected", "evidence": "sqlite_cli_absent"})
+            resolved.append({**row, "disposition": "not_affected", "evidence": ["sqlite_cli_absent", "sqlite_runtime_patched"]})
         elif exact_openssl:
             required = dispositions[row["id"]]["required_invariants"]
             resolved.append({**row, "disposition": "not_affected", "evidence": required})
@@ -243,6 +248,24 @@ def release_vex(policy: dict, evidence: dict, identity: dict, policy_sha256: str
                 + ", ".join(required)
                 + f". Policy {policy_sha256}; application source {evidence['source_tree_sha256']}."
             ),
+        })
+    if sqlite_disposition_supported(evidence):
+        sqlite_purl = "pkg:apk/alpine/sqlite-libs@3.54.1-r0?arch=x86_64"
+        statements.append({
+            "vulnerability": {
+                "@id": "https://www.cve.org/CVERecord?id=CVE-2026-119586",
+                "name": "CVE-2026-119586",
+            },
+            "timestamp": timestamp,
+            "products": [{
+                "@id": product["@id"],
+                "hashes": product["hashes"],
+                "subcomponents": [{"@id": sqlite_purl, "identifiers": {"purl": sqlite_purl}}],
+            }],
+            "status": "not_affected",
+            "justification": "vulnerable_code_not_present",
+            "impact_statement": "The affected sqlite3 CLI recovery implementation is absent; the exact sqlite-libs package and patched Python SQLite runtime were verified.",
+            "status_notes": f"Required runtime invariants: sqlite_cli_absent, sqlite_runtime_patched. Application source {evidence['source_tree_sha256']}.",
         })
     return {
         "@context": "https://openvex.dev/ns/v0.2.0",

@@ -39,7 +39,7 @@ def evidence():
             "config_digest", "manifest_digest", "archive_sha256", "local_image_id", "source_commit",
             "source_tree_sha256", "collector_sha256", "policy_sha256",
         )},
-        "packages": {"libcrypto3": "3.5.9-r1", "libssl3": "3.5.9-r1"},
+        "packages": {"libcrypto3": "3.5.9-r1", "libssl3": "3.5.9-r1", "sqlite-libs": "3.54.1-r0"},
         "invariants": {
             "no_quic_stack": True,
             "no_dane_api": True,
@@ -226,12 +226,15 @@ def test_release_vex_is_manifest_bound_and_stable():
     )
     assert first == second
     assert first["author"] == "https://github.com/milos-plavsic"
-    assert len(first["statements"]) == 7
+    assert len(first["statements"]) == 8
     assert all(row["status"] == "not_affected" for row in first["statements"])
     assert all(
         row["justification"] == "vulnerable_code_not_in_execute_path"
-        for row in first["statements"]
+        for row in first["statements"] if row["vulnerability"]["name"] != "CVE-2026-119586"
     )
+    sqlite = next(row for row in first["statements"] if row["vulnerability"]["name"] == "CVE-2026-119586")
+    assert sqlite["justification"] == "vulnerable_code_not_present"
+    assert sqlite["products"][0]["subcomponents"][0]["@id"] == "pkg:apk/alpine/sqlite-libs@3.54.1-r0?arch=x86_64"
     product = first["statements"][0]["products"][0]
     assert product["hashes"]["sha-256"] == "b" * 64
     assert all(
@@ -311,3 +314,16 @@ def test_changed_policy_content_is_rejected():
     modified["dispositions"]["CVE-2026-121482"]["impact_statement"] = "Different reasoning"
     with pytest.raises(ValueError, match="policy digest mismatch"):
         evaluate(grype(gmatch()), trivy(), evidence(), modified, identity())
+
+
+@pytest.mark.parametrize("mutation", ["package", "cli", "runtime"])
+def test_sqlite_vex_and_release_gate_require_exact_runtime_scope(mutation):
+    item = evidence()
+    if mutation == "package":
+        item["packages"]["sqlite-libs"] = "3.54.1-r1"
+    else:
+        item["invariants"]["sqlite_cli_absent" if mutation == "cli" else "sqlite_runtime_patched"] = False
+    result = evaluate(grype(gmatch("CVE-2026-119586", "sqlite-libs", "3.54.1-r0")), trivy(), item, policy(), identity())
+    assert len(result["unresolved"]) == 1
+    vex = release_vex(policy(), item, identity(), GENERATOR, GENERATOR)
+    assert all(row["vulnerability"]["name"] != "CVE-2026-119586" for row in vex["statements"])
