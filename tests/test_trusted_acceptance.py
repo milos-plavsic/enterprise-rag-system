@@ -78,3 +78,20 @@ def test_reject_ambiguous_or_unsuccessful_evidence(case):
         next(iter(jobs.values())).pop()
     with pytest.raises(ValueError):
         verify(get, 10, HEAD, BASE)
+
+def test_separate_push_check_same_name_does_not_mask_exact_pr_job():
+    get, pull, runs, checks, jobs = fixture()
+    other = copy.deepcopy(checks[0])
+    other["id"] = 98765
+    other["details_url"] = "https://github.com/" + REPO + "/actions/runs/99/job/100"
+    checks.append(other)
+    assert len(verify(get, 10, HEAD, BASE)["verified_jobs"]) == 13
+
+
+def test_same_job_url_duplicate_still_fails():
+    get, pull, runs, checks, jobs = fixture()
+    other = copy.deepcopy(checks[0])
+    other["id"] = 98765
+    checks.append(other)
+    with pytest.raises(ValueError, match="ambiguous"):
+        verify(get, 10, HEAD, BASE)

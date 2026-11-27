@@ -104,8 +104,14 @@ def verify(get, number, head, base):
             job = matches[0]
             require(job["status"] == "completed" and job["conclusion"] == "success"
                     and job["run_id"] == run["id"], f"job did not execute successfully: {name}")
-            candidates = [check for check in checks if check["name"] == name]
-            require(len(candidates) == 1, f"ambiguous check producer: {name}")
+            # GitHub legitimately creates two checks with the same name at
+            # the same head when both push and pull_request triggers run.
+            # Select by the exact GitHub job URL in the approved PR run,
+            # not by a globally unique check name. Duplicate matches for
+            # the same job remain an unconditional rejection.
+            candidates = [check for check in checks
+                          if check["name"] == name and check.get("details_url") == job["html_url"]]
+            require(len(candidates) == 1, f"missing or ambiguous exact job check: {name}")
             check = candidates[0]
             require(check["head_sha"] == head and check["app"]["id"] == ACTIONS_APP
                     and check["status"] == "completed" and check["conclusion"] == "success"
