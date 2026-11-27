@@ -20,6 +20,20 @@ jobs:
       - run: npm ci --ignore-scripts --prefix .github/reference-browser
       - name: Check Playwright harness syntax
         run: node --check scripts/reference_browser.cjs
+      - name: Scope browser dependency installation to signed Ubuntu sources
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test -r /etc/apt/sources.list.d/ubuntu.sources
+          test -r /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          # This ephemeral job needs Ubuntu libraries only, not vendor SDK
+          # repositories preconfigured on the hosted image.
+          sudo tee /etc/apt/apt.conf.d/99rag-ubuntu-only >/dev/null <<'APT'
+          Dir::Etc::sourcelist "/etc/apt/sources.list.d/ubuntu.sources";
+          Dir::Etc::sourceparts "-";
+          APT::Update::Error-Mode "any";
+          Acquire::Retries "3";
+          APT
       - run: .github/reference-browser/node_modules/.bin/playwright install --with-deps chromium
       - name: Install NSS certificate trust tooling
         run: |
