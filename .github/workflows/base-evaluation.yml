@@ -69,39 +69,34 @@ jobs:
           start=$(date +%s)
           python3 scripts/deployment_smoke.py "$CANDIDATE" 2>&1 | tee evaluation/deployment.log
           echo "$(( $(date +%s) - start ))" > evaluation/smoke-seconds.txt
-      - name: Scan candidate (same scanner as release gate)
+      - name: Scan candidate using digest-verified release scanner
         id: scan
         if: steps.build.outcome == 'success'
         continue-on-error: true
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
-        with:
-          image: ${{ env.CANDIDATE }}
-          grype-version: "v0.110.0"
-          cache-db: false
-          severity-cutoff: high
-          fail-build: false
-          output-format: json
+        env:
+          GRYPE_DB_REQUIRE_UPDATE_CHECK: "true"
+          GRYPE_DB_MAX_ALLOWED_BUILT_AGE: "48h"
+          GRYPE_SHOW_SUPPRESSED: "true"
+        run: |
+          bash scripts/install_verified_scanners.sh "$RUNNER_TEMP/security-scanners"
+          "$RUNNER_TEMP/security-scanners/grype" "$CANDIDATE" -o json > evaluation/grype.json
+          python3 -m json.tool evaluation/grype.json >/dev/null
       - name: Preserve raw scan and evaluate existing policy
         id: gate
         if: steps.scan.outcome == 'success'
         continue-on-error: true
-        env:
-          SCAN: ${{ steps.scan.outputs.json }}
         run: |
-          cp "$SCAN" evaluation/grype.json
           python3 scripts/check_image_scan.py evaluation/grype.json 2>&1 | tee evaluation/gate.log
-      - name: Generate candidate SPDX inventory
+      - name: Generate candidate SPDX inventory with verified Syft
         id: sbom
         if: steps.build.outcome == 'success'
         continue-on-error: true
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
-        with:
-          image: ${{ env.CANDIDATE }}
-          format: spdx-json
-          syft-version: "v1.42.3"
-          output-file: evaluation/image.spdx.json
-          upload-artifact: false
-          upload-release-assets: false
+        run: |
+          if [[ ! -x "$RUNNER_TEMP/security-scanners/syft" ]]; then
+            bash scripts/install_verified_scanners.sh "$RUNNER_TEMP/security-scanners"
+          fi
+          "$RUNNER_TEMP/security-scanners/syft" "$CANDIDATE" -o spdx-json=evaluation/image.spdx.json
+          python3 -m json.tool evaluation/image.spdx.json >/dev/null
       - name: Record outcomes without claiming release approval
         if: always()
         env:

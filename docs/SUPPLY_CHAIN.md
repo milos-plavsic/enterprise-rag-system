@@ -160,3 +160,11 @@ invocation is a risk reduction, not proof of scanner integrity.
 ## Build materials and security tooling
 
 The Linux x86_64 Python 3.12 security tool environment is isolated and installs only wheels from `requirements-security-linux-py312.lock` with required SHA-256 hashes. The Dockerfile frontend and every manually upgraded APK are checksum pinned; APK signatures are checked and installation is offline. GitHub-hosted Ubuntu 24.04 runners still receive image updates; their image release and Docker/Buildx versions are captured in the authenticated checksum manifest. These controls narrow and record mutable inputs; they do not claim bit-for-bit reproducibility across hosted runner updates or intentionally refreshed vulnerability feeds.
+
+## Scanner acquisition and export identity
+
+Grype v0.110.0 and Syft v1.42.3 are acquired directly from immutable GitHub releases with exact reviewed SHA-256 archive digests recorded in `scripts/install_verified_scanners.sh`. Scripts from moving branches are never downloaded or executed. Version and digest verification precedes use. The SHA-256 digests anchor the reviewed release artifacts; they do not by themselves prove the maintainer's signing identity.
+
+The Buildx `--load` exporter and Docker Engine `save` can serialise image manifests differently, including OCI vs Docker media types. The verified archive and Buildx manifest digests are recorded separately. Mismatch is only accepted if Buildx's config digest matches the independently verified image config, which commits to rootfs diff IDs; every archived layer's compressed digest and decompressed diff ID is validated. Runtime Docker inspection and scanner configuration identity remain independent checks. Divergent manifest digests must never be presented as byte-equal artifacts.
+
+The native gate now pins the effective filesystem's entire 6,413-entry reviewed baseline (file contents, directory and link entries, modes and numeric owners), rather than only ELF and Python source subsets. Changes to startup configuration and indirectly loaded native code therefore require re-review. This remains a drift detector, not proof of non-reachability of every OpenSSL path.
