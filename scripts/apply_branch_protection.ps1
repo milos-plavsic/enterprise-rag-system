@@ -22,6 +22,35 @@ function Get-OptionalPropertyValue {
     return $Property.Value
 }
 
+function Assert-PolicyRequestShape {
+    param(
+        [Parameter(Mandatory = $true)] [object]$Policy
+    )
+
+    $StatusChecks = $Policy.required_status_checks
+    $HasContexts = $null -ne $StatusChecks.PSObject.Properties["contexts"]
+    $HasChecks = $null -ne $StatusChecks.PSObject.Properties["checks"]
+
+    if ($HasContexts -eq $HasChecks) {
+        throw "Invalid canonical policy: required_status_checks must contain exactly one of 'contexts' or 'checks'. GitHub rejects payloads containing both."
+    }
+
+    if ($HasChecks) {
+        $Checks = @($StatusChecks.checks)
+        if ($Checks.Count -eq 0) {
+            throw "Invalid canonical policy: app-bound required_status_checks.checks must not be empty."
+        }
+        foreach ($Check in $Checks) {
+            if ([string]::IsNullOrWhiteSpace([string]$Check.context)) {
+                throw "Invalid canonical policy: every required status check needs a non-empty context."
+            }
+            if ($null -eq $Check.PSObject.Properties["app_id"] -or $null -eq $Check.app_id) {
+                throw "Invalid canonical policy: every app-bound required status check needs an app_id."
+            }
+        }
+    }
+}
+
 function Assert-NoActors {
     param(
         [Parameter(Mandatory = $true)] [string]$Name,
@@ -126,6 +155,8 @@ if (-not (Test-Path -LiteralPath $PolicyPath)) {
     throw "Missing canonical branch-protection policy: $PolicyPath"
 }
 $Expected = Get-Content -LiteralPath $PolicyPath -Raw | ConvertFrom-Json
+
+Assert-PolicyRequestShape $Expected
 
 if ($SelfTest) {
     $Fixture = [pscustomobject]@{
