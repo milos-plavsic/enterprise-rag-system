@@ -40,7 +40,7 @@ jobs:
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
         with:
           image: rag-candidate:${{ github.sha }}
-          grype-version: "0.110.0"
+          grype-version: "v0.110.0"
           cache-db: false
           severity-cutoff: high
           fail-build: false
@@ -166,7 +166,7 @@ jobs:
         with:
           image: rag-candidate:${{ github.sha }}
           format: spdx-json
-          syft-version: "1.42.3"
+          syft-version: "v1.42.3"
           output-file: rag.spdx.json
           upload-artifact: false
           upload-release-assets: false
@@ -174,7 +174,7 @@ jobs:
         with:
           image: rag-candidate:${{ github.sha }}
           format: cyclonedx-json
-          syft-version: "1.42.3"
+          syft-version: "v1.42.3"
           output-file: rag.cdx.json
           upload-artifact: false
           upload-release-assets: false
