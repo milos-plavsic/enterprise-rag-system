@@ -16,6 +16,20 @@ const probe = JSON.parse(readFileSync(path.join(directory, 'keycloak/probe.json'
 const labCa = readFileSync(path.join(directory,'cert.pem'));
 const project = process.env.RAG_LAB_PROJECT;
 assert.match(project || '', /^juniper-reference-[a-f0-9]{12}$/);
+function within(promise, timeoutMs, label) {
+  let timer;
+  const expired = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Error(`${label} timed out after ${timeoutMs} ms`)), timeoutMs);
+  });
+  return Promise.race([promise, expired]).finally(() => clearTimeout(timer));
+}
+async function responseJson(response, label) {
+  const failure = await within(response.finished(), 5_000, `${label} completion`);
+  assert.equal(failure, null, `${label} failed before the response body completed`);
+  const raw = await within(response.text(), 5_000, `${label} body read`);
+  try { return JSON.parse(raw); }
+  catch { throw Error(`${label} did not contain valid JSON`); }
+}
 const prefix = ['compose', '--env-file', path.join(directory, 'compose.env'), '-p', project, '-f', 'compose.production.yml', '-f', 'compose.reference.yml'];
 function docker(args, capture = false, input) {
   // Supervise Docker Compose and its descendant processes as a group.
@@ -81,7 +95,7 @@ async function assertDeniedResponse(page, response, expectedStatus) {
   assert.equal(response.status(), expectedStatus);
   const expected = expectedStatus === 403 ? 'access denied' : 'passage not found';
   assert.equal(response.headers()['cache-control'], 'no-store');
-  assert.deepEqual(await response.json(), {detail:expected},
+  assert.deepEqual(await responseJson(response, 'Denied citation response'), {detail:expected},
     'Denial response must not include protected content or metadata');
   assert.equal(await page.locator('#results').locator('*').count(), 0,
     'Denied navigation must clear all previously rendered passage elements');
@@ -101,7 +115,7 @@ async function signInWithKey(page, user, expectedKid) {
   try {
     await signIn(page,user);
     assert.ok(exchange && exchange.status() === 200, 'Missing successful browser token exchange');
-    const payload = await exchange.json();
+    const payload = await responseJson(exchange, 'OAuth token exchange');
     assert.equal(typeof payload.access_token, 'string');
     const header = JSON.parse(Buffer.from(payload.access_token.split('.')[0],'base64url').toString('utf8'));
     assert.equal(header.alg,'RS256');
@@ -440,6 +454,7 @@ function browserHome(name, trusted) {
     await page.getByText('Current authorised passage.', {exact:true}).waitFor();
     const oldLink = new URL(page.url()).hash;
     publish(2);
+    console.log('PHASE: validating source-version replacement and stale-link denial');
     await search(page);
     await page.getByText(/exceeds 150 credits/).first().waitFor();
     await page.getByRole('link', {name:'Open verified passage'}).first().click();
@@ -449,6 +464,7 @@ function browserHome(name, trusted) {
     await expectCitationHash(page,oldLink,404,'This passage is unavailable.');
     await page.evaluate(hash => { location.hash = hash; }, currentLink);
     await page.getByText('Current authorised passage.', {exact:true}).waitFor();
+    console.log('PHASE: validating entitlement withdrawal and cross-subject denial');
     admin('backup','/var/lib/rag/lab-backup.sqlite3');
     admin('revoke',accounts.avery.sub);
     await expectCitationHash(page,oldLink,403,'Access is no longer available.');
