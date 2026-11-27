@@ -1,5 +1,6 @@
 param(
-    [switch]$SelfTest
+    [switch]$SelfTest,
+    [switch]$VerifyOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,6 +23,36 @@ function Get-OptionalPropertyValue {
     return $Property.Value
 }
 
+function Assert-ExactBoolean {
+    param([object]$Value, [string]$Name)
+    if ($Value -isnot [bool]) { throw "Invalid Boolean field: $Name" }
+}
+
+function Assert-ExactCheckSet {
+    param([object]$Checks)
+    $RequiredActions = @(
+        "tests (3.11)", "tests (3.12)", "tests (3.13)", "static", "CodeQL (Python)",
+        "CodeQL original TLS regression gate", "image", "reference",
+        "Evaluate alpine-current", "Evaluate debian-bookworm", "Evaluate debian-trixie",
+        "Evaluate docker-hardened-dev", "Evaluate chainguard-dev"
+    )
+    $Expected = @($RequiredActions | ForEach-Object { "$_|15368" }) + @("CodeQL|57789")
+    $Actual = @()
+    foreach ($Check in @($Checks)) {
+        if ($null -eq $Check -or $Check.context -isnot [string] -or
+            [string]::IsNullOrWhiteSpace($Check.context) -or
+            ($Check.app_id -isnot [int] -and $Check.app_id -isnot [long])) {
+            throw "Invalid required check identity"
+        }
+        $Actual += "$($Check.context)|$($Check.app_id)"
+    }
+    if ($Actual.Count -ne $Expected.Count -or
+        @($Actual | Sort-Object -CaseSensitive -Unique).Count -ne $Actual.Count -or
+        @(Compare-Object -ReferenceObject $Expected -DifferenceObject $Actual -CaseSensitive).Count -ne 0) {
+        throw "Required check inventory or approved App identity differs"
+    }
+}
+
 function Assert-PolicyRequestShape {
     param(
         [Parameter(Mandatory = $true)] [object]$Policy
@@ -31,24 +62,34 @@ function Assert-PolicyRequestShape {
     $HasContexts = $null -ne $StatusChecks.PSObject.Properties["contexts"]
     $HasChecks = $null -ne $StatusChecks.PSObject.Properties["checks"]
 
-    if ($HasContexts -eq $HasChecks) {
-        throw "Invalid canonical policy: required_status_checks must contain exactly one of 'contexts' or 'checks'. GitHub rejects payloads containing both."
+    if ($HasContexts -or -not $HasChecks) {
+        throw "Canonical policy must use app-bound checks only."
     }
-
-    if ($HasChecks) {
-        $Checks = @($StatusChecks.checks)
-        if ($Checks.Count -eq 0) {
-            throw "Invalid canonical policy: app-bound required_status_checks.checks must not be empty."
-        }
-        foreach ($Check in $Checks) {
-            if ([string]::IsNullOrWhiteSpace([string]$Check.context)) {
-                throw "Invalid canonical policy: every required status check needs a non-empty context."
-            }
-            if ($null -eq $Check.PSObject.Properties["app_id"] -or $null -eq $Check.app_id) {
-                throw "Invalid canonical policy: every app-bound required status check needs an app_id."
-            }
-        }
+    Assert-ExactCheckSet $StatusChecks.checks
+    Assert-ExactBoolean $StatusChecks.strict "strict"
+    if (-not $StatusChecks.strict) { throw "Strict checks must be enabled" }
+    foreach ($Name in @("enforce_admins", "required_linear_history", "allow_force_pushes",
+        "allow_deletions", "block_creations", "required_conversation_resolution", "lock_branch", "allow_fork_syncing")) {
+        Assert-ExactBoolean (Get-OptionalPropertyValue $Policy $Name) $Name
     }
+    foreach ($Name in @("enforce_admins", "required_linear_history", "required_conversation_resolution")) {
+        if (-not $Policy.$Name) { throw "Required control is disabled: $Name" }
+    }
+    foreach ($Name in @("allow_force_pushes", "allow_deletions", "block_creations", "lock_branch", "allow_fork_syncing")) {
+        if ($Policy.$Name) { throw "Unexpected enabled control: $Name" }
+    }
+    $Reviews = $Policy.required_pull_request_reviews
+    foreach ($Name in @("dismiss_stale_reviews", "require_code_owner_reviews", "require_last_push_approval")) {
+        Assert-ExactBoolean (Get-OptionalPropertyValue $Reviews $Name) $Name
+    }
+    if (-not $Reviews.dismiss_stale_reviews -or -not $Reviews.require_last_push_approval -or
+        $Reviews.required_approving_review_count -isnot [int] -and $Reviews.required_approving_review_count -isnot [long] -or
+        $Reviews.required_approving_review_count -ne 1) {
+        throw "Required review policy differs"
+    }
+    Assert-NoActors "dismissal restrictions" (Get-OptionalPropertyValue $Reviews "dismissal_restrictions")
+    Assert-NoActors "pull-request bypass allowances" (Get-OptionalPropertyValue $Reviews "bypass_pull_request_allowances")
+    if ($null -ne $Policy.restrictions) { throw "Unexpected push restrictions" }
 }
 
 function Assert-NoActors {
@@ -74,6 +115,10 @@ function Assert-BranchProtectionMatchesPolicy {
         [Parameter(Mandatory = $true)] [object]$BranchState
     )
 
+    Assert-ExactBoolean $BranchState.protected "protected"
+    Assert-ExactCheckSet $Actual.required_status_checks.checks
+    Assert-ExactBoolean $Actual.required_status_checks.strict "actual strict"
+    Assert-ExactBoolean $Actual.enforce_admins.enabled "actual enforce_admins"
     if ($BranchState.protected -ne $true) {
         throw "Verification failed: main is not reported as protected."
     }
@@ -87,6 +132,12 @@ function Assert-BranchProtectionMatchesPolicy {
 
     $ExpectedReviews = $Expected.required_pull_request_reviews
     $ActualReviews = $Actual.required_pull_request_reviews
+    foreach ($Name in @("dismiss_stale_reviews", "require_code_owner_reviews", "require_last_push_approval")) {
+        Assert-ExactBoolean (Get-OptionalPropertyValue $ActualReviews $Name) "actual $Name"
+    }
+    if ($ActualReviews.required_approving_review_count -isnot [int] -and $ActualReviews.required_approving_review_count -isnot [long]) {
+        throw "Invalid actual review count"
+    }
     if ([bool]$ActualReviews.dismiss_stale_reviews -ne [bool]$ExpectedReviews.dismiss_stale_reviews) {
         throw "Verification failed: stale-review dismissal differs."
     }
@@ -130,7 +181,8 @@ function Assert-BranchProtectionMatchesPolicy {
         if ($null -eq $ActualControl) {
             throw "Verification failed: GitHub response omitted $ActualName."
         }
-        if ([bool]$ActualControl.enabled -ne $ExpectedValue) {
+        Assert-ExactBoolean $ActualControl.enabled "actual $ActualName"
+        if ($ActualControl.enabled -ne $ExpectedValue) {
             throw "Verification failed: $ExpectedName differs from canonical policy."
         }
     }
@@ -145,7 +197,7 @@ function Assert-BranchProtectionMatchesPolicy {
             ForEach-Object { "$($_.context)|$($_.app_id)" } |
             Sort-Object
     )
-    $Diff = @(Compare-Object -ReferenceObject $ExpectedChecks -DifferenceObject $ActualChecks)
+    $Diff = @(Compare-Object -ReferenceObject $ExpectedChecks -DifferenceObject $ActualChecks -CaseSensitive)
     if ($Diff.Count -ne 0) {
         $Rendered = ($Diff | Out-String).Trim()
         throw "Verification failed: required status checks differ from policy.`n$Rendered"
@@ -222,6 +274,30 @@ if ($SelfTest) {
         }
     }
 
+    # Canonical requests must be rejected before any mutation, not just on readback.
+    $InvalidRequests = @(
+        @{ Name = "wildcard App"; Apply = { param($x) $x.required_status_checks.checks[0].app_id = -1 } },
+        @{ Name = "wrong App"; Apply = { param($x) $x.required_status_checks.checks[0].app_id = 57789 } },
+        @{ Name = "string App"; Apply = { param($x) $x.required_status_checks.checks[0].app_id = "15368" } },
+        @{ Name = "duplicate context"; Apply = { param($x) $x.required_status_checks.checks[1] = $x.required_status_checks.checks[0] } },
+        @{ Name = "string Boolean"; Apply = { param($x) $x.enforce_admins = "true" } },
+        @{ Name = "disabled strict"; Apply = { param($x) $x.required_status_checks.strict = $false } },
+        @{ Name = "missing check"; Apply = { param($x) $x.required_status_checks.checks = @($x.required_status_checks.checks | Select-Object -Skip 1) } }
+    )
+    foreach ($Case in $InvalidRequests) {
+        $Candidate = $Expected | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        & $Case.Apply $Candidate
+        $Rejected = $false
+        try { Assert-PolicyRequestShape $Candidate } catch { $Rejected = $true }
+        if (-not $Rejected) { throw "Self-test accepted invalid request: $($Case.Name)" }
+    }
+
+    $BadActual = $Fixture | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $BadActual.enforce_admins.enabled = "true"
+    $Rejected = $false
+    try { Assert-BranchProtectionMatchesPolicy $Expected $BadActual $BranchFixture } catch { $Rejected = $true }
+    if (-not $Rejected) { throw "Self-test accepted non-Boolean readback" }
+
     $OmittedNullFixture = $Fixture | ConvertTo-Json -Depth 20 | ConvertFrom-Json
     $OmittedNullFixture.PSObject.Properties.Remove("restrictions")
     Assert-BranchProtectionMatchesPolicy $Expected $OmittedNullFixture $BranchFixture
@@ -251,6 +327,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "GitHub CLI is not authenticated for github.com."
 }
 
+if (-not $VerifyOnly) {
 Write-Host "Applying canonical protection policy to $Repo/$Branch..."
 & gh api `
     --method PUT `
@@ -260,6 +337,9 @@ Write-Host "Applying canonical protection policy to $Repo/$Branch..."
     --input $PolicyPath 1>$null
 if ($LASTEXITCODE -ne 0) {
     throw "GitHub rejected the branch-protection update."
+}
+} else {
+    Write-Host "Read-only verification of $Repo/$Branch..."
 }
 
 $ActualRaw = & gh api `

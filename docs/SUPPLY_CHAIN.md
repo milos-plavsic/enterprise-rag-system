@@ -117,7 +117,7 @@ the affected `sqlite3` CLI is absent.
 Daily scheduled production assurance and manual dispatch are configured on the
 default branch. The release bundle contains the raw scans, identity receipt,
 reachability evidence, investigation and release VEX documents, SPDX and
-CycloneDX inventories, checksums, and main-only build provenance. No registry
+CycloneDX inventories, checksums, and main-only build provenance. The complete SHA256SUMS manifest is itself an attestation subject; authenticate it against the approved main commit before using it to verify the evidence files. No registry
 push or deployment is performed.
 
 ## Release acceptance checklist
@@ -136,7 +136,7 @@ push or deployment is performed.
   and the immutable release identity before any use.
 
 Registry publication/signing, historical differential reports across scans,
-Python dependency-lock update automation, repeated browser reliability runs
+Python dependency-lock update automation, broader cross-runner browser reliability testing
 and deployment monitoring remain separate work requiring tested integration.
 Cross-scanner differences are captured, not historical trends. Do not claim
 these capabilities merely because the current workflow generates evidence.

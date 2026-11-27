@@ -31,4 +31,7 @@ def test_app_bound_checks_are_used_for_required_status_checks() -> None:
 
     for check in status_checks["checks"]:
         assert isinstance(check["context"], str) and check["context"]
-        assert isinstance(check["app_id"], int)
+        assert type(check["app_id"]) is int
+        assert check["app_id"] == (57789 if check["context"] == "CodeQL" else 15368)
+    contexts = [check["context"] for check in status_checks["checks"]]
+    assert len(contexts) == len(set(contexts)) == 14

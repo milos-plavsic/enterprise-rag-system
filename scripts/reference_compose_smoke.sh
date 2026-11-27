@@ -9,7 +9,11 @@ rag=(docker compose --env-file "$lab/compose.env" -p juniper-reference -f compos
 cleanup() {
   rc=$?
   if ((rc)); then "${rag[@]}" logs --no-color --tail 60 >&2 || true; fi
-  "${rag[@]}" --profile local-model down -v --remove-orphans || true
+  if ! "${rag[@]}" --profile local-model down -v --remove-orphans; then
+    echo "Reference lab cleanup failed" >&2
+    if ((rc == 0)); then rc=1; fi
+  fi
+  exit "$rc"
 }
 trap cleanup EXIT
 "${rag[@]}" config --quiet
