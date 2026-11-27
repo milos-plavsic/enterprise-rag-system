@@ -25,7 +25,7 @@ EXPECTED_INVARIANTS = {
     "CVE-2026-35190": {"no_suite_b_certificate_flag"},
 }
 EXPECTED_OPENSSL_CVES = frozenset(EXPECTED_INVARIANTS)
-BINDING_KEYS = ("config_digest", "manifest_digest", "archive_sha256", "source_commit",
+BINDING_KEYS = ("config_digest", "manifest_digest", "archive_sha256", "local_image_id", "source_commit",
                 "source_tree_sha256", "collector_sha256", "policy_sha256")
 
 

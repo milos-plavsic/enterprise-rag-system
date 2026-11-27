@@ -6,7 +6,7 @@ import tarfile
 
 import pytest
 
-from scripts.image_identity import archive_identity, identity
+from scripts.image_identity import archive_identity, identity, verify_daemon_image
 
 REF = "rag-candidate:test"
 CONFIG_BYTES = json.dumps(
@@ -171,3 +171,20 @@ def test_buildx_manifest_must_match_actual_archive_manifest(tmp_path):
     metadata["containerimage.descriptor"]["digest"] = metadata["containerimage.digest"]
     with pytest.raises(ValueError, match="Buildx manifest differs"):
         identity(metadata, report(), REF, archive_identity(docker_archive(tmp_path), REF))
+
+
+@pytest.mark.parametrize("field", ["layers", "user", "architecture"])
+def test_daemon_image_binding_rejects_drift(field):
+    receipt = {"rootfs_diff_ids": ["sha256:" + "a" * 64],
+               "runtime_config": {"User": "10001:10001"}}
+    image = {"Id": "sha256:" + "d" * 64, "Os": "linux", "Architecture": "amd64",
+             "RootFS": {"Layers": receipt["rootfs_diff_ids"][:]}, "Config": {"User": "10001:10001"}}
+    assert verify_daemon_image([image], receipt) == image["Id"]
+    if field == "layers":
+        image["RootFS"]["Layers"] = ["sha256:" + "e" * 64]
+    elif field == "user":
+        image["Config"]["User"] = "0"
+    else:
+        image["Architecture"] = "arm64"
+    with pytest.raises(ValueError):
+        verify_daemon_image([image], receipt)

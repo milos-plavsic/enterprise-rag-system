@@ -82,7 +82,7 @@ def main() -> None:
     inspect_path, identity_path, policy_path, output_path = map(Path, sys.argv[1:])
     identity = json.loads(identity_path.read_bytes())
     policy = json.loads(policy_path.read_bytes())
-    binding_keys = ("config_digest", "manifest_digest", "archive_sha256", "source_commit",
+    binding_keys = ("config_digest", "manifest_digest", "archive_sha256", "local_image_id", "source_commit",
                     "source_tree_sha256", "collector_sha256", "policy_sha256")
     binding = {key: identity[key] for key in binding_keys}
     collector_hash = "sha256:" + hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
@@ -94,8 +94,10 @@ def main() -> None:
     image = json.loads(inspect_path.read_text(encoding="utf-8"))
     if not isinstance(image, list) or len(image) != 1:
         raise RuntimeError("unexpected Docker image inspect payload")
-    if image[0].get("Id") != binding["config_digest"]:
-        raise RuntimeError("runtime image configuration differs from verified candidate")
+    if image[0].get("Id") != binding["local_image_id"]:
+        raise RuntimeError("runtime Docker image ID differs from verified local identity")
+    if (image[0].get("RootFS") or {}).get("Layers") != identity["rootfs_diff_ids"]:
+        raise RuntimeError("runtime rootfs differs from verified archive")
     config = image[0].get("Config", {})
     command = config.get("Cmd")
     if not isinstance(command, list):

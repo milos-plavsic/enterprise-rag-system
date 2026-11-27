@@ -114,6 +114,8 @@ def archive_identity(path: Path, expected_ref: str) -> dict:
         "config_member": config_name,
         "manifest_digest": canonical_manifest,
         "verified_layer_count": verified_layer_count,
+        "rootfs_diff_ids": config["rootfs"]["diff_ids"],
+        "runtime_config": config.get("config", {}),
     }
 
 
@@ -197,6 +199,8 @@ def identity(build: dict, report: dict, expected_ref: str, archive_receipt: dict
         "manifest_digest": canonical_manifest,
         "scanner_manifest_digest": scanner_manifest_digest,
         "verified_layer_count": archive_receipt["verified_layer_count"],
+        "rootfs_diff_ids": archive_receipt["rootfs_diff_ids"],
+        "runtime_config": archive_receipt["runtime_config"],
         "config_digest": config,
         "buildx_manifest_digest": build_manifest,
         "buildx_config_digest": build_config,
@@ -212,6 +216,28 @@ def identity(build: dict, report: dict, expected_ref: str, archive_receipt: dict
     }
 
 
+def verify_daemon_image(inspect: object, identity_receipt: dict) -> str:
+    """Bind the local engine ID without assuming it equals the OCI config digest."""
+    if not isinstance(inspect, list) or len(inspect) != 1 or not isinstance(inspect[0], dict):
+        raise ValueError("expected exactly one Docker image inspection")
+    image = inspect[0]
+    if image.get("Os") != "linux" or image.get("Architecture") != "amd64":
+        raise ValueError("Docker engine platform differs from archived image")
+    if (image.get("RootFS") or {}).get("Layers") != identity_receipt["rootfs_diff_ids"]:
+        raise ValueError("Docker engine rootfs differs from verified archive")
+    expected = identity_receipt["runtime_config"]
+    actual = image.get("Config")
+    if not isinstance(expected, dict) or not isinstance(actual, dict):
+        raise ValueError("missing runtime configuration")
+    # ArgsEscaped is legacy platform metadata and may not be returned by the
+    # engine. All execution/security-relevant image config fields must match.
+    fields = {"User", "Env", "Cmd", "Entrypoint", "WorkingDir", "ExposedPorts",
+              "Volumes", "Labels", "StopSignal", "Healthcheck", "Shell", "OnBuild"}
+    if any(expected.get(field) != actual.get(field) for field in fields):
+        raise ValueError("Docker engine runtime configuration differs from verified archive")
+    return _digest(image.get("Id"), "local Docker image ID")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("build_metadata", type=Path)
@@ -219,6 +245,7 @@ def main() -> None:
     parser.add_argument("image_reference")
     parser.add_argument("image_archive", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--inspect", type=Path, required=True)
     args = parser.parse_args()
     archive_receipt = archive_identity(args.image_archive, args.image_reference)
     receipt = identity(
@@ -228,6 +255,7 @@ def main() -> None:
         archive_receipt,
     )
     receipt.update(source_receipt(args.image_reference))
+    receipt["local_image_id"] = verify_daemon_image(json.loads(args.inspect.read_bytes()), receipt)
     args.output.write_text(
         json.dumps(receipt, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

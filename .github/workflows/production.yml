@@ -33,9 +33,15 @@ jobs:
       - name: Exercise deployment, policy and restore
         run: python3 scripts/deployment_smoke.py rag-candidate:${GITHUB_SHA}
       - id: scan
+        env:
+          GRYPE_DB_REQUIRE_UPDATE_CHECK: "true"
+          GRYPE_DB_MAX_ALLOWED_BUILT_AGE: "48h"
+          GRYPE_SHOW_SUPPRESSED: "true"
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
         with:
           image: rag-candidate:${{ github.sha }}
+          grype-version: "0.110.0"
+          cache-db: false
           severity-cutoff: high
           fail-build: false
           output-format: json
@@ -48,15 +54,15 @@ jobs:
           name: rag-image-scan-${{ github.sha }}
           path: rag-grype.json
           if-no-files-found: error
-      - name: Verify OCI image identity across Buildx and Grype
-        run: >-
-          python3 scripts/image_identity.py rag-build-metadata.json rag-grype.json
-          rag-candidate:${GITHUB_SHA} rag-image.tar rag-image-identity.json
+      - name: Verify OCI image identity across Buildx, Grype and local engine
+        run: |
+          docker image inspect rag-candidate:${GITHUB_SHA} > rag-image-inspect.json
+          python3 scripts/image_identity.py rag-build-metadata.json rag-grype.json \
+            rag-candidate:${GITHUB_SHA} rag-image.tar rag-image-identity.json --inspect rag-image-inspect.json
       - name: Collect isolated OpenSSL reachability evidence
         run: |
-          image_id=$(python3 -c 'import json; print(json.load(open("rag-image-identity.json"))["config_digest"])')
-          docker image inspect "$image_id" > rag-image-inspect.json
-          docker run --rm --network none --read-only --cap-drop ALL \
+          image_id=$(python3 -c 'import json; print(json.load(open("rag-image-identity.json"))["local_image_id"])')
+          docker run --pull never --rm --network none --read-only --cap-drop ALL \
             --security-opt no-new-privileges:true --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
             --entrypoint python \
             --mount "type=bind,src=$PWD/scripts/openssl_reachability.py,dst=/reachability.py,readonly" \
@@ -99,11 +105,13 @@ jobs:
             rag-investigation.openvex.json
           if-no-files-found: error
       - name: Secondary vulnerability scan of the saved candidate
-        run: bash scripts/trivy_image_scan.sh "$PWD/rag-image.tar" rag-trivy.json
+        run: bash scripts/trivy_image_scan.sh "$PWD/rag-image.tar" rag-trivy.json rag-trivy-db.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: rag-trivy-scan-${{ github.sha }}
-          path: rag-trivy.json
+          path: |
+            rag-trivy.json
+            rag-trivy-db.json
           if-no-files-found: error
       - name: Compare independent scanner evidence
         id: comparison
@@ -158,6 +166,7 @@ jobs:
         with:
           image: rag-candidate:${{ github.sha }}
           format: spdx-json
+          syft-version: "1.42.3"
           output-file: rag.spdx.json
           upload-artifact: false
           upload-release-assets: false
@@ -165,9 +174,15 @@ jobs:
         with:
           image: rag-candidate:${{ github.sha }}
           format: cyclonedx-json
+          syft-version: "1.42.3"
           output-file: rag.cdx.json
           upload-artifact: false
           upload-release-assets: false
+      - name: Verify database freshness and independent inventory coverage
+        run: >-
+          python3 scripts/verify_scan_coverage.py rag-grype.json rag-trivy.json
+          rag-trivy-db.json rag.spdx.json rag.cdx.json rag-image-identity.json
+          rag-scan-coverage.json
       - run: |
           python3 - <<'PY'
           import hashlib, json
@@ -184,7 +199,7 @@ jobs:
           sha256sum rag-image.tar.gz rag-image.id rag.spdx.json rag.cdx.json \
             rag-build-metadata.json rag-image-identity.json rag-grype.json rag-trivy.json \
             rag-scan-comparison.json rag-investigation.openvex.json rag-openssl-evidence.json \
-            rag-release-decisions.json rag-release.openvex.json > SHA256SUMS
+            rag-release-decisions.json rag-release.openvex.json rag-trivy-db.json rag-scan-coverage.json > SHA256SUMS
       - name: Verify release checksum manifest
         run: sha256sum --check SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -200,6 +215,8 @@ jobs:
             rag-grype.json
             rag-trivy.json
             rag-scan-comparison.json
+            rag-trivy-db.json
+            rag-scan-coverage.json
             rag-investigation.openvex.json
             rag-openssl-evidence.json
             rag-release-decisions.json

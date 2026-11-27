@@ -16,6 +16,7 @@ def identity():
     return {
         "config_digest": CONFIG,
         "archive_sha256": "sha256:" + "1" * 64,
+        "local_image_id": "sha256:" + "4" * 64,
         "source_commit": "2" * 40,
         "source_tree_sha256": "sha256:" + "c" * 64,
         "collector_sha256": "sha256:" + "3" * 64,
@@ -35,7 +36,7 @@ def evidence():
         "schema": 1,
         "source_tree_sha256": "sha256:" + "c" * 64,
         "image_binding": {key: identity()[key] for key in (
-            "config_digest", "manifest_digest", "archive_sha256", "source_commit",
+            "config_digest", "manifest_digest", "archive_sha256", "local_image_id", "source_commit",
             "source_tree_sha256", "collector_sha256", "policy_sha256",
         )},
         "packages": {"libcrypto3": "3.5.9-r1", "libssl3": "3.5.9-r1"},
@@ -281,7 +282,7 @@ def test_canonical_manifest_remains_distinct_from_scanner_reconstruction():
 
 
 @pytest.mark.parametrize("field", [
-    "config_digest", "manifest_digest", "archive_sha256", "source_commit",
+    "config_digest", "manifest_digest", "archive_sha256", "local_image_id", "source_commit",
     "source_tree_sha256", "collector_sha256", "policy_sha256",
 ])
 def test_valid_but_mismatched_runtime_binding_rejected(field):
