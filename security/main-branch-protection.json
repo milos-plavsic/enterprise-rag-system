@@ -1,7 +1,6 @@
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": [],
     "checks": [
       { "context": "tests (3.11)", "app_id": 15368 },
       { "context": "tests (3.12)", "app_id": 15368 },
