@@ -59,6 +59,10 @@ jobs:
           docker image inspect rag-candidate:${GITHUB_SHA} > rag-image-inspect.json
           python3 scripts/image_identity.py rag-build-metadata.json rag-grype.json \
             rag-candidate:${GITHUB_SHA} rag-image.tar rag-image-identity.json --inspect rag-image-inspect.json
+      - name: Inspect full image native and dependency source inventory
+        run: >-
+          python3 scripts/native_archive_inventory.py rag-image.tar rag-image-identity.json
+          security/native-review-baseline.json rag-native-inventory.json
       - name: Collect isolated OpenSSL reachability evidence
         run: |
           image_id=$(python3 -c 'import json; print(json.load(open("rag-image-identity.json"))["local_image_id"])')
@@ -199,7 +203,7 @@ jobs:
           sha256sum rag-image.tar.gz rag-image.id rag.spdx.json rag.cdx.json \
             rag-build-metadata.json rag-image-identity.json rag-grype.json rag-trivy.json \
             rag-scan-comparison.json rag-investigation.openvex.json rag-openssl-evidence.json \
-            rag-release-decisions.json rag-release.openvex.json rag-trivy-db.json rag-scan-coverage.json > SHA256SUMS
+            rag-release-decisions.json rag-release.openvex.json rag-trivy-db.json rag-scan-coverage.json rag-native-inventory.json > SHA256SUMS
       - name: Verify release checksum manifest
         run: sha256sum --check SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -217,6 +221,7 @@ jobs:
             rag-scan-comparison.json
             rag-trivy-db.json
             rag-scan-coverage.json
+            rag-native-inventory.json
             rag-investigation.openvex.json
             rag-openssl-evidence.json
             rag-release-decisions.json

@@ -37,6 +37,16 @@ consumer drift fails closed and requires a new review. A vendor-fixed package
 should replace these dispositions as soon as it is available and passes the
 same runtime tests.
 
+The separate archive inventory gate parses ELF dynamic tables without running
+candidate binaries, reports direct and transitive dependencies, and pins
+the full ELF file inventory, Python source inventory, and application source
+digest to the recorded reference candidate. Any drift requires a reviewed
+baseline change. This baseline is derived from the actual prior artifact;
+it is not a substitute for independent code-path review. In particular,
+static linkage does not prove the absence of dynamic loading or indirect
+native calls. The OpenSSL dispositions remain conditional until independently
+reviewed or replaced with verified vendor-fixed packages.
+
 Reference: [OpenSSL 3.5 advisories](https://openssl-library.org/news/vulnerabilities-3.5/).
 
 ## Comparative evaluation

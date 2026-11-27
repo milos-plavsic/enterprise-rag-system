@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "reference_commit": "55fa83dc3a64065df59769f9b14289d0d9293f4a",
+  "reference_archive_artifact_sha256": "af8300ff93a98c659f1e34977b986062f9ed920efe31a509a2993d1df8173224",
+  "elf_count": 162,
+  "elf_inventory_sha256": "c9cce2622c96cab8e428973b1d385fba24abef9832f4295866c9db6c5accc135",
+  "python_source_count": 2052,
+  "python_inventory_sha256": "29280f8c446e4a67830bcdc3c2938833df754d93400b75a4fac7e00bc328119f",
+  "application_source_sha256": "sha256:f8e4b2eb4b7d46bf106bb04d7eb17e29e2756e6fba1412a0e461c287be7f5325",
+  "direct_consumers": [
+    "usr/bin/c_rehash",
+    "usr/bin/ssl_client",
+    "usr/lib/engines-3/afalg.so",
+    "usr/lib/engines-3/loader_attic.so",
+    "usr/lib/engines-3/padlock.so",
+    "usr/lib/krb5/plugins/preauth/spake.so",
+    "usr/lib/krb5/plugins/tls/k5tls.so",
+    "usr/lib/libapk.so.3.0.0",
+    "usr/lib/libssl.so.3",
+    "usr/lib/ossl-modules/legacy.so",
+    "usr/local/lib/python3.12/lib-dynload/_hashlib.cpython-312-x86_64-linux-musl.so",
+    "usr/local/lib/python3.12/lib-dynload/_ssl.cpython-312-x86_64-linux-musl.so"
+  ]
+}
