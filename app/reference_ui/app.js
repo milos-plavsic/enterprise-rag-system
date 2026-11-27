@@ -29,9 +29,13 @@ async function callback() {
   const pending = JSON.parse(sessionStorage.getItem('juniper.pkce') || 'null');
   sessionStorage.removeItem('juniper.pkce');
   if (!pending || Date.now() - pending.at > 300_000 || pending.state !== params.get('state') || params.get('iss') !== issuer || !params.get('code')) throw Error();
-  const r = await fetch(`${issuer}/protocol/openid-connect/token`, {method: 'POST', credentials: 'omit', redirect: 'error', body: new URLSearchParams({grant_type: 'authorization_code', client_id: clientId, redirect_uri: redirect, code: params.get('code'), code_verifier: pending.verifier})});
+  const r = await fetch(`${issuer}/protocol/openid-connect/token`, {method: 'POST', credentials: 'omit', redirect: 'error',
+    signal: AbortSignal.timeout(15_000),
+    body: new URLSearchParams({grant_type: 'authorization_code', client_id: clientId, redirect_uri: redirect, code: params.get('code'), code_verifier: pending.verifier})});
+  const raw = await r.text();
   if (!r.ok) throw Error();
-  const result = await r.json();
+  let result;
+  try { result = JSON.parse(raw); } catch { throw Error(); }
   if (typeof result.access_token !== 'string' || !Number.isFinite(result.expires_in) || result.expires_in <= 0) throw Error();
   token = result.access_token;
   expiration = Date.now() + result.expires_in * 1000;
@@ -47,10 +51,19 @@ async function callback() {
 }
 async function api(path, opts = {}) {
   if (!token || Date.now() >= expiration) { clear(); throw Error('Sign in again.'); }
-  const response = await fetch(path, {...opts, redirect: 'error', cache: 'no-store', headers: {...opts.headers, Authorization: `Bearer ${token}`}});
+  const response = await fetch(path, {...opts, redirect: 'error', cache: 'no-store',
+    signal: AbortSignal.timeout(15_000),
+    headers: {...opts.headers, Authorization: `Bearer ${token}`}});
+  // Consume the body under the same hard deadline before changing session/UI
+  // state. This makes failed requests deterministic for both the application
+  // and the browser security harness, without exposing server error content.
+  const raw = await response.text();
+  let payload;
+  try { payload = JSON.parse(raw); } catch { payload = undefined; }
   if (response.status === 401 || response.status === 403) { clear(); throw Error('Access is no longer available.'); }
   if (!response.ok) throw Error(response.status === 404 ? 'This passage is unavailable.' : 'The service is temporarily unavailable.');
-  return response.json();
+  if (payload === undefined) throw Error('The service is temporarily unavailable.');
+  return payload;
 }
 const linkPattern = /^\/v1\/documents\/[a-f0-9]{32}\/passages\/[1-9]\d{0,1}\/[1-9]\d{0,3}$/;
 function article(row) {
