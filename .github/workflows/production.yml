@@ -167,6 +167,12 @@ jobs:
             --mount "type=bind,src=$PWD/openvex-0.2.0.schema.json,dst=/schema.json,readonly" \
             --mount "type=bind,src=$PWD/rag-release.openvex.json,dst=/vex.json,readonly" \
             "$validator" validate --format-assertion /schema.json /vex.json
+      - name: Bind final release decisions and VEX to reviewed full filesystem
+        run: >-
+          python3 scripts/verify_release_native_assurance.py
+          rag-native-inventory.json security/native-review-baseline.json
+          rag-image-identity.json rag-release-decisions.json rag-release.openvex.json
+          rag-native-release-binding.json
       - name: Preserve release disposition evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -211,7 +217,7 @@ jobs:
           sha256sum rag-image.tar.gz rag-image.id rag.spdx.json rag.cdx.json \
             rag-build-metadata.json rag-image-identity.json rag-grype.json rag-trivy.json \
             rag-scan-comparison.json rag-investigation.openvex.json rag-openssl-evidence.json \
-            rag-release-decisions.json rag-release.openvex.json rag-trivy-db.json rag-scan-coverage.json rag-native-inventory.json rag-build-environment.json > SHA256SUMS
+            rag-release-decisions.json rag-release.openvex.json rag-trivy-db.json rag-scan-coverage.json rag-native-inventory.json rag-native-release-binding.json rag-build-environment.json > SHA256SUMS
       - name: Verify release checksum manifest
         run: sha256sum --check SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -230,6 +236,7 @@ jobs:
             rag-trivy-db.json
             rag-scan-coverage.json
             rag-native-inventory.json
+            rag-native-release-binding.json
             rag-build-environment.json
             rag-investigation.openvex.json
             rag-openssl-evidence.json
