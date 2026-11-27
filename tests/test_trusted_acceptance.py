@@ -149,3 +149,20 @@ def test_trusted_reviewer_review_is_reported():
     assert result["trusted_review"] == {
         "review_id": 800, "reviewer_id": REVIEWER_ID,
         "reviewer_login": REVIEWER_LOGIN, "submitted_at": "2026-11-27T14:00:00Z"}
+
+
+@pytest.mark.parametrize("timestamp", [
+    None, "", "2026-02-30T01:00:00Z", "2026-11-27T14:00:00+01:00",
+    "2026-11-27", "2026-13-01T00:00:00Z", "2026-11-27T25:00:00Z",
+])
+def test_malformed_or_non_utc_review_timestamp_is_rejected(timestamp):
+    get, pull, runs, checks, jobs, reviews = fixture()
+    reviews[0]["submitted_at"] = timestamp
+    with pytest.raises(ValueError, match="timestamp"):
+        verify(get, 10, HEAD, BASE, REVIEWER_LOGIN, REVIEWER_ID)
+
+
+def test_valid_fractional_utc_review_timestamp():
+    get, pull, runs, checks, jobs, reviews = fixture()
+    reviews[0]["submitted_at"] = "2026-11-27T14:00:00.123Z"
+    assert verify(get, 10, HEAD, BASE, REVIEWER_LOGIN, REVIEWER_ID)["trusted_review"]["review_id"] == 800

@@ -11,6 +11,7 @@ import argparse
 import json
 import re
 import subprocess
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 REPO = "milos-plavsic/enterprise-rag-system"
@@ -82,6 +83,19 @@ def page_list(get, path):
     raise ValueError("review pagination limit exceeded")
 
 
+def valid_review_time(value):
+    """Accept valid UTC GitHub review timestamps, including fractional seconds."""
+    if not isinstance(value, str) or re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,6})?Z",
+            value) is None:
+        return False
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return dt.utcoffset() == timedelta(0) and dt.tzinfo is not None
+    except ValueError:
+        return False
+
+
 def review_approval(get, number, head, reviewer_login, reviewer_id, author_id):
     """An exact-head GitHub approval from an externally designated identity.
 
@@ -106,9 +120,7 @@ def review_approval(get, number, head, reviewer_login, reviewer_id, author_id):
             relevant.append(review)
     require(relevant, "independent reviewer has not submitted a GitHub review")
     for review in relevant:
-        require(isinstance(review.get("submitted_at"), str) and
-                bool(re.fullmatch(r"\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ",
-                                  review["submitted_at"])),
+        require(valid_review_time(review.get("submitted_at")),
                 "review submission timestamp missing or malformed")
     latest = max(relevant, key=lambda row: (row["submitted_at"], row["id"]))
     require(latest.get("state") == "APPROVED" and latest.get("commit_id") == head,
