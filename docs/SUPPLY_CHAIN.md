@@ -180,3 +180,7 @@ The first bytecode-free production build at commit `a84813c5538436b4f24365532523
 ### Bounded browser administration
 
 The browser harness executes routine source, backup, grant and revoke operations inside the already-running API container using `docker compose exec -T`, avoiding ephemeral network-interface churn during live browser assertions. Only restore preparation while the API is stopped launches a separate container. All Docker Compose child processes have process-group-aware TERM/KILL timeouts; credential and authorization checks are never retried. Phase markers contain only public release numbers and no protected document or OAuth data.
+
+### Buildx exporter metadata classification
+
+A direct review of the successful 27 November `docker buildx build --load` metadata confirms that `containerimage.digest` equals `containerimage.config.digest` and **not** the separately verified saved OCI manifest digest. The identity validator now classifies that reported digest as `config` or `archived-manifest`; any unknown third digest fails closed. The archived manifest bytes and layer contents are always separately hashed and recorded. Previous receipt field `buildx_manifest_digest` was semantically misleading and has been replaced by `buildx_exporter_reported_digest` and `buildx_exporter_digest_kind`. No claim is made that the two manifest representations have identical bytes.

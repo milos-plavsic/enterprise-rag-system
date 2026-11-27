@@ -97,7 +97,8 @@ def test_links_archive_config_to_validated_scanner_manifest(tmp_path):
     receipt = identity(build(), report(), REF, archive)
     assert receipt["config_digest"] == CONFIG
     assert receipt["buildx_config_digest"] == CONFIG
-    assert receipt["buildx_manifest_digest"] == BUILD_MANIFEST
+    assert receipt["buildx_exporter_reported_digest"] == BUILD_MANIFEST
+    assert receipt["buildx_exporter_digest_kind"] == "archived-manifest"
     assert receipt["manifest_digest"] == BUILD_MANIFEST
     assert receipt["scanner_manifest_digest"] == report()["source"]["target"]["manifestDigest"]
     assert receipt["scanner_manifest_digest"] != receipt["manifest_digest"]
@@ -125,12 +126,9 @@ def test_identity_mismatch_fails_closed(tmp_path, case):
         identity(metadata, scan, REF, archive)
 
 
-def test_missing_buildx_digest_fields_are_allowed_when_archive_and_grype_agree(tmp_path):
-    archive = archive_identity(docker_archive(tmp_path), REF)
-    receipt = identity({}, report(), REF, archive)
-    assert receipt["config_digest"] == CONFIG
-    assert receipt["buildx_config_digest"] is None
-    assert receipt["buildx_manifest_digest"] is None
+def test_missing_buildx_exporter_identity_fails_closed(tmp_path):
+    with pytest.raises(ValueError, match="lacks any image digest"):
+        identity({}, report(), REF, archive_identity(docker_archive(tmp_path), REF))
 
 
 def test_archive_tag_mismatch_rejected(tmp_path):
@@ -165,18 +163,25 @@ def test_unsafe_archive_member_rejected(tmp_path):
     with pytest.raises(ValueError, match="unsafe"):
         archive_identity(path, REF)
 
-def test_buildx_manifest_conversion_needs_shared_config(tmp_path):
+def test_buildx_load_reports_config_digest_not_manifest(tmp_path):
+    metadata = build()
+    metadata["containerimage.digest"] = CONFIG
+    metadata["containerimage.descriptor"]["digest"] = CONFIG
+    archive = archive_identity(docker_archive(tmp_path), REF)
+    receipt = identity(metadata, report(), REF, archive)
+    assert receipt["buildx_exporter_digest_kind"] == "config"
+    assert receipt["buildx_exporter_reported_digest"] == CONFIG
+    assert receipt["manifest_digest"] == BUILD_MANIFEST
+    del metadata["containerimage.config.digest"]
+    assert identity(metadata, report(), REF, archive)["buildx_exporter_digest_kind"] == "config"
+
+
+def test_unknown_buildx_exporter_digest_is_rejected(tmp_path):
     metadata = build()
     metadata["containerimage.digest"] = "sha256:" + "a" * 64
     metadata["containerimage.descriptor"]["digest"] = metadata["containerimage.digest"]
-    archive = archive_identity(docker_archive(tmp_path), REF)
-    verified = identity(metadata, report(), REF, archive)
-    assert verified["buildx_archive_representation_changed"] is True
-    assert verified["manifest_digest"] != verified["buildx_manifest_digest"]
-    assert verified["buildx_config_digest"] == verified["config_digest"]
-    del metadata["containerimage.config.digest"]
-    with pytest.raises(ValueError, match="matching config evidence"):
-        identity(metadata, report(), REF, archive)
+    with pytest.raises(ValueError, match="neither config nor archive manifest"):
+        identity(metadata, report(), REF, archive_identity(docker_archive(tmp_path), REF))
 
 
 def test_untrusted_buildx_media_type_fails(tmp_path):

@@ -131,15 +131,19 @@ def identity(build: dict, report: dict, expected_ref: str, archive_receipt: dict
     if build_config is not None and build_config != config:
         raise ValueError("Buildx and archive config digests differ")
 
-    build_manifest = _optional_digest(
-        build.get("containerimage.digest"), "Buildx manifest digest")
-    # --load and docker save may encode different OCI/Docker manifest bytes.
-    # Their digests MUST remain distinct. A conversion is accepted only if
-    # Buildx and the independently verified saved archive have the exact same
-    # image-config digest, which cryptographically commits to rootfs diff IDs.
-    representation_changed = build_manifest is not None and build_manifest != canonical_manifest
-    if representation_changed and build_config != config:
-        raise ValueError("Buildx/exporter manifest conversion lacks matching config evidence")
+    reported_digest = _optional_digest(
+        build.get("containerimage.digest"), "Buildx exporter image digest")
+    # Buildx --load can report the image *config* digest as
+    # containerimage.digest, not an OCI manifest digest. Accept only a
+    # cryptographically verified representation; never silently label a
+    # config digest as a manifest digest or accept a third unknown hash.
+    if build_config is None and reported_digest is None:
+        raise ValueError("Buildx exporter metadata lacks any image digest")
+    if reported_digest is not None and reported_digest not in {config, canonical_manifest}:
+        raise ValueError("Buildx reported digest matches neither config nor archive manifest")
+    reported_kind = ("config" if reported_digest == config else
+                     "archived-manifest" if reported_digest == canonical_manifest else
+                     "not-reported")
     descriptor = build.get("containerimage.descriptor")
     if descriptor is not None:
         if not isinstance(descriptor, dict):
@@ -151,9 +155,9 @@ def identity(build: dict, report: dict, expected_ref: str, archive_receipt: dict
             raise ValueError("unexpected Buildx manifest media type")
         descriptor_digest = _optional_digest(
             descriptor.get("digest"), "Buildx descriptor digest")
-        if (descriptor_digest is not None and build_manifest is not None
-                and descriptor_digest != build_manifest):
-            raise ValueError("Buildx descriptor and manifest digests differ")
+        if (descriptor_digest is not None and reported_digest is not None
+                and descriptor_digest != reported_digest):
+            raise ValueError("Buildx descriptor and reported image digests differ")
         annotations = descriptor.get("annotations")
         if annotations is not None and not isinstance(annotations, dict):
             raise ValueError("invalid Buildx descriptor annotations")
@@ -212,8 +216,8 @@ def identity(build: dict, report: dict, expected_ref: str, archive_receipt: dict
         "rootfs_diff_ids": archive_receipt["rootfs_diff_ids"],
         "runtime_config": archive_receipt["runtime_config"],
         "config_digest": config,
-        "buildx_manifest_digest": build_manifest,
-        "buildx_archive_representation_changed": representation_changed,
+        "buildx_exporter_reported_digest": reported_digest,
+        "buildx_exporter_digest_kind": reported_kind,
         "buildx_config_digest": build_config,
         "buildx_media_type": (
             descriptor.get("mediaType") if isinstance(descriptor, dict) else None
