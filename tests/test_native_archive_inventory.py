@@ -3,7 +3,7 @@ import json
 import tarfile
 
 import pytest
-from scripts.native_archive_inventory import consumer_paths, digest, verify_baseline, safe_name, inventory
+from scripts.native_archive_inventory import consumer_paths, digest, observed_baseline, verify_baseline, safe_name, inventory
 
 
 def fixture():
@@ -25,6 +25,24 @@ def test_transitive_consumers():
     elf, source, identity, baseline, filesystem = fixture()
     assert consumer_paths(elf) == (["extension", "ssl"], ["extension", "indirect", "ssl"])
     assert verify_baseline(elf, source, identity, baseline, filesystem)["elf_count"] == 3
+
+
+def test_observed_baseline_preserves_exact_source_identity():
+    elf, source, identity, _, filesystem = fixture()
+    identity["source_tree_sha256"] = "sha256:review-this-exact-tree"
+    observed = observed_baseline(elf, source, identity, filesystem)
+    assert observed["application_source_sha256"] == "sha256:review-this-exact-tree"
+
+
+def test_all_baseline_drift_dimensions_are_reported():
+    elf, source, identity, baseline, filesystem = fixture()
+    identity["source_tree_sha256"] = "changed"
+    source["a.py"] = "also changed"
+    with pytest.raises(ValueError) as caught:
+        verify_baseline(elf, source, identity, baseline, filesystem)
+    message = str(caught.value)
+    assert "python_inventory_sha256" in message
+    assert "application_source_sha256" in message
 
 
 @pytest.mark.parametrize("change", ["elf", "dependency", "application", "new_consumer"])
