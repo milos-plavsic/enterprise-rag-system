@@ -7,6 +7,7 @@ from pathlib import Path
 
 ORIGIN = "http://localhost:8000"
 CLIENT = "juniper-browser"
+PROBE_CLIENT = "juniper-rollover-probe"
 USERS = (("avery", "analyst", "3b024b03-8260-484f-8f32-e5bdb744b319"),
          ("drew", "manager", "f42c83d4-d68b-4cd6-99b4-1e6c65157b30"),
          ("robin", "auditor", "25d7591e-ce26-4352-bcf3-b8d15cc6c753"))
@@ -22,21 +23,32 @@ def prepare(directory: Path) -> None:
     directory.mkdir(mode=0o700, parents=True, exist_ok=False)
     accounts = {name: {"password": secrets.token_urlsafe(24), "role": role, "sub": subject}
                 for name, role, subject in USERS}
+    probe_secret = secrets.token_urlsafe(32)
     private_json(directory / "accounts.json", accounts)
+    private_json(directory / "probe.json",
+                 {"client_id": PROBE_CLIENT, "client_secret": probe_secret})
     private_json(directory / "juniper-realm.json", {
         "realm": "juniper", "enabled": True, "sslRequired": "all", "accessTokenLifespan": 60,
         "registrationAllowed": False, "bruteForceProtected": True, "rememberMe": False,
-        "clients": [{"clientId": CLIENT, "enabled": True, "protocol": "openid-connect", "publicClient": True,
-                     "standardFlowEnabled": True, "directAccessGrantsEnabled": False, "implicitFlowEnabled": False,
-                     "redirectUris": [ORIGIN + "/reference/"], "webOrigins": [ORIGIN], "fullScopeAllowed": False,
-                     "attributes": {"pkce.code.challenge.method": "S256", "access.token.header.type.rfc9068": "true"},
-                     "protocolMappers": [
-                         {"name": "rag-audience", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
-                          "config": {"included.custom.audience": "juniper-rag", "access.token.claim": "true", "id.token.claim": "false"}},
-                         {"name": "rag-role", "protocol": "openid-connect", "protocolMapper": "oidc-usermodel-attribute-mapper",
-                          "config": {"user.attribute": "rag_role", "claim.name": "enterprise_role", "jsonType.label": "String",
-                                     "access.token.claim": "true", "id.token.claim": "false", "userinfo.token.claim": "false"}},
-                     ]}],
+        "clients": [
+            {"clientId": CLIENT, "enabled": True, "protocol": "openid-connect", "publicClient": True,
+             "standardFlowEnabled": True, "directAccessGrantsEnabled": False, "implicitFlowEnabled": False,
+             "redirectUris": [ORIGIN + "/reference/"], "webOrigins": [ORIGIN], "fullScopeAllowed": False,
+             "attributes": {"pkce.code.challenge.method": "S256", "access.token.header.type.rfc9068": "true"},
+             "protocolMappers": [
+                 {"name": "rag-audience", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
+                  "config": {"included.custom.audience": "juniper-rag", "access.token.claim": "true", "id.token.claim": "false"}},
+                 {"name": "rag-role", "protocol": "openid-connect", "protocolMapper": "oidc-usermodel-attribute-mapper",
+                  "config": {"user.attribute": "rag_role", "claim.name": "enterprise_role", "jsonType.label": "String",
+                             "access.token.claim": "true", "id.token.claim": "false", "userinfo.token.claim": "false"}},
+             ]},
+            # Disposable confidential client used only to prove that a newly
+            # activated signing key can issue tokens before browser rollover tests.
+            {"clientId": PROBE_CLIENT, "enabled": True, "protocol": "openid-connect",
+             "publicClient": False, "secret": probe_secret, "serviceAccountsEnabled": True,
+             "standardFlowEnabled": False, "directAccessGrantsEnabled": False,
+             "implicitFlowEnabled": False, "fullScopeAllowed": False},
+        ],
         "users": [{"id": data["sub"], "username": name, "enabled": True, "emailVerified": True,
                    "firstName": name.title(), "lastName": "Test", "email": name + "@juniper.invalid",
                    "attributes": {"rag_role": [data["role"]]},

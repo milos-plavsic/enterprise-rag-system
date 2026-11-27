@@ -13,21 +13,19 @@ def main(path: Path) -> int:
     for row in matches:
         vulnerability, package = row["vulnerability"], row["artifact"]
         severity = vulnerability["severity"].lower()
-        if severity not in {"high", "critical"}:
+        if severity not in {"negligible", "low", "medium", "high", "critical", "unknown"}:
+            raise ValueError("unrecognized scanner severity")
+        if severity not in {"high", "critical", "unknown"}:
             continue
-        # Advisory concerns the CLI's .recover implementation, not libsqlite3.
-        # CI separately proves this image has no CLI and uses the patched runtime.
-        if (vulnerability["id"], package["name"], package["version"], package["type"]) == (
-                "CVE-2026-119586", "sqlite-libs", "3.54.1-r0", "apk"):
-            print("CVE-2026-119586: not affected (SQLite CLI absent; see docs/PRODUCTION.md).")
-            continue
+        # A comparative scan has no image-bound runtime evidence. It must not
+        # waive any finding; only the production evaluator may disposition it.
         fix = vulnerability["fix"]
         print(json.dumps({"severity": severity, "id": vulnerability["id"], "package": package["name"],
                           "version": package["version"], "type": package["type"], "fix": fix["state"],
                           "versions": fix["versions"]}, ensure_ascii=True))
         failed = True
     if failed:
-        print("High or critical image findings block candidate packaging.", file=sys.stderr)
+        print("High, critical or unknown-severity image findings block candidate packaging.", file=sys.stderr)
     return int(failed)
 
 

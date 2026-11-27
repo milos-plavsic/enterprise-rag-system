@@ -3,13 +3,16 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main, "hardening/**"]
+    branches: [main]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 permissions:
   contents: read
 jobs:
-  reference:
+  reference-functional:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -18,7 +21,30 @@ jobs:
         with:
           node-version: 24
       - run: npm ci --ignore-scripts --prefix .github/reference-browser
+      - name: Check Playwright and orchestration syntax
+        run: |
+          node --check scripts/reference_browser.cjs
+          bash -n scripts/reference_compose_smoke.sh
+      - name: Scope browser dependency installation to signed Ubuntu sources
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test -r /etc/apt/sources.list.d/ubuntu.sources
+          test -r /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          # This ephemeral job needs Ubuntu libraries only, not vendor SDK
+          # repositories preconfigured on the hosted image.
+          sudo tee /etc/apt/apt.conf.d/99rag-ubuntu-only >/dev/null <<'APT'
+          Dir::Etc::sourcelist "/etc/apt/sources.list.d/ubuntu.sources";
+          Dir::Etc::sourceparts "-";
+          APT::Update::Error-Mode "any";
+          Acquire::Retries "3";
+          APT
       - run: .github/reference-browser/node_modules/.bin/playwright install --with-deps chromium
+      - name: Install NSS certificate trust tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libnss3-tools
+          certutil -H > /dev/null 2>&1 || test -x "$(command -v certutil)"
       - run: docker build --platform linux/amd64 -t juniper-rag:local .
       - name: Verify reference identity and document lifecycle in Chromium
         env:
@@ -36,3 +62,70 @@ jobs:
           name: juniper-fictional-retrieval-report
           path: reference-report.json
           if-no-files-found: error
+
+  stability:
+    name: stability (${{ matrix.run }})
+    needs: reference-functional
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts --prefix .github/reference-browser
+      - name: Check Playwright and orchestration syntax
+        run: |
+          node --check scripts/reference_browser.cjs
+          bash -n scripts/reference_compose_smoke.sh
+      - name: Scope browser dependency installation to signed Ubuntu sources
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test -r /etc/apt/sources.list.d/ubuntu.sources
+          test -r /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          # This ephemeral job needs Ubuntu libraries only, not vendor SDK
+          # repositories preconfigured on the hosted image.
+          sudo tee /etc/apt/apt.conf.d/99rag-ubuntu-only >/dev/null <<'APT'
+          Dir::Etc::sourcelist "/etc/apt/sources.list.d/ubuntu.sources";
+          Dir::Etc::sourceparts "-";
+          APT::Update::Error-Mode "any";
+          Acquire::Retries "3";
+          APT
+      - run: .github/reference-browser/node_modules/.bin/playwright install --with-deps chromium
+      - name: Install NSS certificate trust tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libnss3-tools
+          certutil -H > /dev/null 2>&1 || test -x "$(command -v certutil)"
+      - run: docker build --platform linux/amd64 -t juniper-rag:local .
+      - name: Verify independent security lifecycle (no retry)
+        env:
+          NODE_PATH: .github/reference-browser/node_modules
+          RAG_LAB_TEST_MODEL: "0"
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=20s 18m \
+            bash scripts/reference_compose_smoke.sh "$RUNNER_TEMP/juniper-stability-${{ matrix.run }}"
+
+  reference:
+    name: reference
+    needs: [reference-functional, stability]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require full reference, benchmark, and 10 independent lifecycle passes
+        env:
+          FUNCTIONAL: ${{ needs['reference-functional'].result }}
+          STABILITY: ${{ needs.stability.result }}
+        run: |
+          set -euo pipefail
+          test "$FUNCTIONAL" = success
+          test "$STABILITY" = success

@@ -6,7 +6,7 @@ The separately configured [Juniper Works reference lab](REFERENCE_LAB.md) is a f
 
 ## Install and operate
 
-1. Retrieve the CI image bundle, SBOM and checksum manifest from the approved `main` build. Verify the attestation with `gh attestation verify rag-image.tar.gz --repo milos-plavsic/enterprise-rag-system --signer-workflow milos-plavsic/enterprise-rag-system/.github/workflows/production.yml`, repeat for the SBOM and image ID, then verify `sha256sum -c SHA256SUMS`. Load the verified tar and compare `docker image inspect --format '{{.Id}}' IMAGE` with `rag-image.id`. Import that image into the approved registry and configure `RAG_IMAGE` using its **registry digest**, not a mutable tag. Use the same digest for the API and parser. The workflow does not auto-publish or deploy.
+1. Retrieve the complete CI candidate bundle from the approved `main` build. Verify the attestation of `SHA256SUMS` **before trusting any checksum in it**, using `gh attestation verify SHA256SUMS --repo milos-plavsic/enterprise-rag-system --signer-workflow milos-plavsic/enterprise-rag-system/.github/workflows/production.yml --source-ref refs/heads/main --source-digest APPROVED_MAIN_COMMIT_SHA` (replace the last argument with the exact approved main commit). Verify the other attested subjects using the same constraints, then run `sha256sum -c SHA256SUMS` before loading anything. Do not accept an unsigned or mismatched manifest. `rag-image-identity.json` binds the saved Docker archive SHA-256, the archive-derived image config digest (`rag-image.id`) and the scanner-validated local manifest digest; Docker's implementation-specific `.Id` is not used as a portable cross-tool identity. Load only the verified archive. If it is imported into an approved registry, record the mapping from this verified candidate to the resulting immutable **registry manifest digest**, verify the registry content/provenance according to the registry's controls, and configure `RAG_IMAGE` with that registry digest, not a mutable tag. Use the same registry digest for the API and parser. The workflow does not auto-publish or deploy.
 2. Provision an encrypted local block-backed directory `RAG_DATA_PATH`, owned by UID/GID 10001 with mode `0700`. Do not mount a network filesystem. Provision a unique audit HMAC key through a read-only file `RAG_AUDIT_KEY_PATH` readable by UID 10001 and restricted from other users. An encrypted dedicated backup target and central log transport are operator responsibilities.
 3. Put a trusted TLS ingress in front of the Compose loopback listener. Enforce approved client networks and identity, pre-auth connection and request limits, body deadlines, TLS settings and an egress policy limiting API outbound connections to the approved IdP endpoint. Do not make `/ready` or `/health` public. The parser has no network and only mounts the Unix socket volume, not corpus data or identity/audit secrets.
 4. Configure `RAG_OIDC_ISSUER`, `RAG_OIDC_AUDIENCE`, `RAG_OIDC_JWKS_URL` and, if different, `RAG_OIDC_ROLE_CLAIM`. The contract is an RS256 access token (`typ: at+jwt`, not an ID token) with an explicit key ID, an exact trusted issuer and API audience, a stable subject, the application role claim, and a lifetime of no more than five minutes. The app allows five seconds of clock skew. JWKS caching is bounded to one minute, and production also checks a local entitlement for each operation. Keep IdP and host clocks synchronised and pre-publish new keys before issuing tokens. An unavailable IdP is not bypassed. Cached keys remain valid until their cache expires, unless access was locally revoked.
@@ -72,6 +72,39 @@ Reference baselines for review include [OWASP ASVS](https://owasp.org/www-projec
 
 ## Image vulnerability disposition
 
-The production image updates Alpine `zlib` and `krb5-libs` to the vendor fixed packages. It temporarily uses the checksum-pinned, signed Alpine `sqlite-libs` 3.54.1-r0 from the Alpine edge package repository because 3.24 still ships 3.53.4. No edge package repository is enabled in the image. Revisit the one package override when 3.24 provides a stable patched library. The [SQLite release history](https://www.sqlite.org/changes.html) and [Debian maintainer record](https://bugs.debian.org/1152790) document the upstream 3.54 library fixes.
+The production candidate retains the digest-pinned Python/Alpine base and
+installs exact vendor-signed Alpine `libcrypto3=3.5.9-r1` and
+`libssl3=3.5.9-r1`. Four earlier OpenSSL findings are fixed by that revision.
+Seven current 17/24 November OpenSSL 3.5.9 advisories are tracked independently of scanner-feed timing. Their product-specific
+classification is governed by
+[SUPPLY_CHAIN.md](SUPPLY_CHAIN.md) and
+`security/openssl-3.5.9-r1-dispositions.json`, not by a generic CVE allowlist.
 
-The sole exact-match disposition in the high/critical scan gate is `CVE-2026-119586` on Alpine `sqlite-libs` 3.54.1-r0. The advisory describes the `sqlite3` command-line shell's `.recover` command, which is absent from this image. No application or restore command shells out to `sqlite3`. CI checks the actual runtime library and CLI absence before packaging. The raw report is retained even when the gate fails. A match on another package, version or advisory is not waived. See the [vendor advisory](https://bugzilla.redhat.com/show_bug.cgi?id=CVE-2026-119586).
+For those seven advisories, release requires runtime evidence from the final image
+showing that the exact vulnerable execution preconditions are absent. The
+evidence checks the pinned HTTP/1.1 transport, QUIC, DANE, CMS/PKCS#7, CRL, Suite B and
+direct PEM/native call paths, native consumers of system OpenSSL, exact package
+versions and related runtime invariants. Any package, source, protocol or native
+consumer drift invalidates the disposition and blocks packaging. Both Grype and
+Trivy findings are evaluated; scanner disagreement is retained as evidence and
+never acts as an exception. The resulting investigation and reviewed release
+OpenVEX documents must both pass the pinned official v0.2.0 JSON Schema with format assertions in the isolated validation container.
+
+The production image also updates Alpine `zlib` and `krb5-libs` to vendor
+fixed packages. It temporarily uses the checksum-pinned, signed Alpine
+`sqlite-libs` 3.54.1-r0 package from the Alpine edge package repository
+because the evaluated 3.24 base still ships an older SQLite library. No edge
+repository is enabled in the runtime image.
+
+The exact SQLite disposition applies only to `CVE-2026-119586` on Alpine
+`sqlite-libs` 3.54.1-r0 and only while CI proves that the runtime library is
+at least 3.54.1 and the affected `sqlite3` command-line shell is absent. No
+application or restore path shells out to `sqlite3`. A finding on another
+package, version, package type or advisory is not inherited by this
+disposition.
+
+The raw scanner reports, immutable image identity receipt, reachability
+evidence, VEX documents, SPDX and CycloneDX SBOMs and checksums are retained in
+the candidate artifact. The main-only provenance step runs only after the full
+production image job succeeds. The workflow does not publish or deploy the
+image.

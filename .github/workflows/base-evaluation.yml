@@ -1,0 +1,119 @@
+name: Base image evaluation (non-release)
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  evaluate:
+    name: Evaluate ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: alpine-current
+            base: current
+          - name: debian-bookworm
+            base: docker.io/library/python:3.12-slim-bookworm
+          - name: debian-trixie
+            base: docker.io/library/python:3.12-slim-trixie
+          - name: docker-hardened-dev
+            base: dhi.io/python:3.12-debian13-dev
+          - name: chainguard-dev
+            base: cgr.dev/chainguard/python:3.12-dev
+    env:
+      BASE_TAG: ${{ matrix.base }}
+      CANDIDATE: rag-evaluation:${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Resolve candidate and record build outcome
+        id: build
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p evaluation
+          printf '%s\n' "$BASE_TAG" > evaluation/requested-base.txt
+          git rev-parse HEAD > evaluation/source-commit.txt
+          start=$(date +%s)
+          if [[ "$BASE_TAG" == current ]]; then
+            sed -n '2p' Dockerfile > evaluation/resolved-base.txt
+            docker build --platform linux/amd64 --tag "$CANDIDATE" . 2>&1 | tee evaluation/build.log
+          else
+            docker pull --platform linux/amd64 "$BASE_TAG" 2>&1 | tee evaluation/pull.log
+            base=$(docker image inspect --format '{{index .RepoDigests 0}}' "$BASE_TAG")
+            [[ "$base" =~ @sha256:[a-f0-9]{64}$ ]]
+            printf '%s\n' "$base" > evaluation/resolved-base.txt
+            docker build --platform linux/amd64 --build-arg "BASE=$base" -f Dockerfile.candidate --tag "$CANDIDATE" . 2>&1 | tee evaluation/build.log
+          fi
+          echo "$(( $(date +%s) - start ))" > evaluation/build-seconds.txt
+          docker image inspect --format '{{.Id}} {{.Size}} {{.Config.User}}' "$CANDIDATE" > evaluation/image.txt
+      - name: Record runtime compatibility and security invariants
+        id: runtime
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          docker run --rm --network none --entrypoint python "$CANDIDATE" -c 'import json,os,shutil,sqlite3,ssl,sys; print(json.dumps(dict(python=sys.version,sqlite=sqlite3.sqlite_version,openssl=ssl.OPENSSL_VERSION,uid=os.getuid(),gid=os.getgid(),sqlite_cli=shutil.which("sqlite3")))); assert sys.version_info[:2]==(3,12); assert sqlite3.sqlite_version_info >= (3,54,1); assert shutil.which("sqlite3") is None; assert os.getuid()==os.getgid()==10001' | tee evaluation/runtime.json
+      - name: Exercise identical deployment smoke
+        id: smoke
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          start=$(date +%s)
+          python3 scripts/deployment_smoke.py "$CANDIDATE" 2>&1 | tee evaluation/deployment.log
+          echo "$(( $(date +%s) - start ))" > evaluation/smoke-seconds.txt
+      - name: Scan candidate using digest-verified release scanner
+        id: scan
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        env:
+          GRYPE_DB_REQUIRE_UPDATE_CHECK: "true"
+          GRYPE_DB_MAX_ALLOWED_BUILT_AGE: "48h"
+          GRYPE_SHOW_SUPPRESSED: "true"
+        run: |
+          bash scripts/install_verified_scanners.sh "$RUNNER_TEMP/security-scanners"
+          "$RUNNER_TEMP/security-scanners/grype" "$CANDIDATE" -o json > evaluation/grype.json
+          python3 -m json.tool evaluation/grype.json >/dev/null
+      - name: Preserve raw scan and evaluate existing policy
+        id: gate
+        if: steps.scan.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python3 scripts/check_image_scan.py evaluation/grype.json 2>&1 | tee evaluation/gate.log
+      - name: Generate candidate SPDX inventory with verified Syft
+        id: sbom
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          if [[ ! -x "$RUNNER_TEMP/security-scanners/syft" ]]; then
+            bash scripts/install_verified_scanners.sh "$RUNNER_TEMP/security-scanners"
+          fi
+          "$RUNNER_TEMP/security-scanners/syft" "$CANDIDATE" -o spdx-json=evaluation/image.spdx.json
+          python3 -m json.tool evaluation/image.spdx.json >/dev/null
+      - name: Record outcomes without claiming release approval
+        if: always()
+        env:
+          BUILD: ${{ steps.build.outcome }}
+          RUNTIME: ${{ steps.runtime.outcome }}
+          SMOKE: ${{ steps.smoke.outcome }}
+          SCAN: ${{ steps.scan.outcome }}
+          GATE: ${{ steps.gate.outcome }}
+          SBOM: ${{ steps.sbom.outcome }}
+        run: |
+          mkdir -p evaluation
+          python3 -c 'import json,os; print(json.dumps({k.lower():os.environ.get(k,"") for k in ("BUILD","RUNTIME","SMOKE","SCAN","GATE","SBOM")},indent=2))' | tee evaluation/outcomes.json
+          echo 'Evaluation only. Workflow success means evidence collection, not candidate acceptance.' >> "$GITHUB_STEP_SUMMARY"
+          cat evaluation/outcomes.json >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: base-evaluation-${{ matrix.name }}-${{ github.sha }}
+          path: evaluation/
+          if-no-files-found: error

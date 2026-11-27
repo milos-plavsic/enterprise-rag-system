@@ -1,53 +1,225 @@
 name: Production profile
 on:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
   pull_request:
     branches: [main]
   push:
-    branches: [main, "hardening/**"]
+    branches: [main]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 permissions:
   contents: read
 jobs:
   image:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-      - run: docker build --platform linux/amd64 --tag rag-candidate:${GITHUB_SHA} .
+      - name: Record runner and build tool environment
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          result = {"source_commit": os.environ["GITHUB_SHA"],
+                    "runner_image": os.environ.get("ImageOS", "unknown"),
+                    "runner_image_version": os.environ.get("ImageVersion", "unknown"),
+                    "docker": subprocess.check_output(["docker", "version"], text=True),
+                    "buildx": subprocess.check_output(["docker", "buildx", "version"], text=True),
+                    "dockerfile_frontend": Path("Dockerfile").read_text().splitlines()[0]}
+          Path("rag-build-environment.json").write_text(json.dumps(result, indent=2) + "\n")
+          PY
+      - name: Build candidate and capture immutable Buildx metadata
+        env:
+          BUILDX_METADATA_PROVENANCE: max
+        run: >-
+          docker buildx build --platform linux/amd64 --load --provenance=false
+          --metadata-file rag-build-metadata.json
+          --tag rag-candidate:${GITHUB_SHA} .
+      - name: Save exact candidate Docker archive
+        run: docker save rag-candidate:${GITHUB_SHA} -o rag-image.tar
       - name: Verify SQLite runtime and absence of affected CLI
         run: >-
           docker run --rm --network none --entrypoint python rag-candidate:${GITHUB_SHA}
           -c 'import shutil, sqlite3; assert sqlite3.sqlite_version_info >= (3,54,1); assert shutil.which("sqlite3") is None'
       - name: Exercise deployment, policy and restore
         run: python3 scripts/deployment_smoke.py rag-candidate:${GITHUB_SHA}
-      - id: scan
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
-        with:
-          image: rag-candidate:${{ github.sha }}
-          severity-cutoff: high
-          fail-build: false
-          output-format: json
+      - name: Install digest-verified Grype and Syft binaries
+        run: |
+          bash scripts/install_verified_scanners.sh "$RUNNER_TEMP/security-scanners"
+          echo "$RUNNER_TEMP/security-scanners" >> "$GITHUB_PATH"
+      - name: Run complete primary vulnerability scan
+        env:
+          GRYPE_DB_REQUIRE_UPDATE_CHECK: "true"
+          GRYPE_DB_MAX_ALLOWED_BUILT_AGE: "48h"
+          GRYPE_SHOW_SUPPRESSED: "true"
+        run: |
+          grype "rag-candidate:${GITHUB_SHA}" -o json > rag-grype.json
+          python3 -m json.tool rag-grype.json >/dev/null
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: rag-image-scan-${{ github.sha }}
-          path: ${{ steps.scan.outputs.json }}
+          path: rag-grype.json
           if-no-files-found: error
-      - name: Enforce high and critical vulnerability gate
-        env:
-          RAG_SCAN_REPORT: ${{ steps.scan.outputs.json }}
-        run: python3 scripts/check_image_scan.py "$RAG_SCAN_REPORT"
-      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+      - name: Verify OCI image identity across Buildx, Grype and local engine
+        run: |
+          docker image inspect rag-candidate:${GITHUB_SHA} > rag-image-inspect.json
+          python3 scripts/image_identity.py rag-build-metadata.json rag-grype.json \
+            rag-candidate:${GITHUB_SHA} rag-image.tar rag-image-identity.json --inspect rag-image-inspect.json
+      - name: Inspect full image native and dependency source inventory
+        run: >-
+          python3 scripts/native_archive_inventory.py rag-image.tar rag-image-identity.json
+          security/native-review-baseline.json rag-native-inventory.json
+      - name: Preserve native filesystem evidence even on a rejected baseline
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          image: rag-candidate:${{ github.sha }}
-          format: spdx-json
-          output-file: rag.spdx.json
-          upload-artifact: false
-          upload-release-assets: false
+          name: rag-native-inventory-${{ github.sha }}
+          path: rag-native-inventory.json
+          if-no-files-found: warn
+      - name: Collect isolated OpenSSL reachability evidence
+        run: |
+          image_id=$(python3 -c 'import json; print(json.load(open("rag-image-identity.json"))["local_image_id"])')
+          docker run --pull never --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
+            --entrypoint python \
+            --mount "type=bind,src=$PWD/scripts/openssl_reachability.py,dst=/reachability.py,readonly" \
+            --mount "type=bind,src=$PWD/rag-image-inspect.json,dst=/image-inspect.json,readonly" \
+            --mount "type=bind,src=$PWD/rag-image-identity.json,dst=/identity.json,readonly" \
+            --mount "type=bind,src=$PWD/security/openssl-3.5.9-r1-dispositions.json,dst=/policy.json,readonly" \
+            "$image_id" /reachability.py /image-inspect.json /identity.json /policy.json - > rag-openssl-evidence.json
+      - name: Generate deterministic OpenVEX investigation evidence
+        run: >-
+          python3 scripts/openvex_inventory.py rag-grype.json rag-image-identity.json
+          rag-investigation.openvex.json
+      - name: Fetch immutable official OpenVEX v0.2.0 schema
+        run: |
+          set -euo pipefail
+          spec=50abcfe257f1fc36ded2a17cc78e25821958cca2
+          git init -q "$RUNNER_TEMP/openvex-spec"
+          git -C "$RUNNER_TEMP/openvex-spec" remote add origin https://github.com/openvex/spec.git
+          git -C "$RUNNER_TEMP/openvex-spec" fetch -q --depth=1 origin "$spec"
+          test "$(git -C "$RUNNER_TEMP/openvex-spec" rev-parse FETCH_HEAD)" = "$spec"
+          git -C "$RUNNER_TEMP/openvex-spec" show FETCH_HEAD:openvex_json_schema.json > openvex-0.2.0.schema.json
+      - name: Validate investigation VEX against official OpenVEX v0.2.0 schema
+        run: |
+          validator=ghcr.io/sourcemeta/jsonschema:v17.2.1@sha256:7f91686a3a13acf1306e4924b9e1c1d4a672a40846bf00fbd6a6630d282628f7
+          docker pull --platform linux/amd64 "$validator"
+          common=(--rm --platform linux/amd64 --network none --read-only --cap-drop ALL
+            --security-opt no-new-privileges:true --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m)
+          docker run "${common[@]}" \
+            --mount "type=bind,src=$PWD/openvex-0.2.0.schema.json,dst=/schema.json,readonly" \
+            "$validator" metaschema /schema.json
+          docker run "${common[@]}" \
+            --mount "type=bind,src=$PWD/openvex-0.2.0.schema.json,dst=/schema.json,readonly" \
+            --mount "type=bind,src=$PWD/rag-investigation.openvex.json,dst=/vex.json,readonly" \
+            "$validator" validate --format-assertion /schema.json /vex.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rag-vex-investigation-${{ github.sha }}
+          path: |
+            rag-build-metadata.json
+            rag-image-identity.json
+            rag-investigation.openvex.json
+          if-no-files-found: error
+      - name: Secondary vulnerability scan of the saved candidate
+        run: bash scripts/trivy_image_scan.sh "$PWD/rag-image.tar" rag-trivy.json rag-trivy-db.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rag-trivy-scan-${{ github.sha }}
+          path: |
+            rag-trivy.json
+            rag-trivy-db.json
+          if-no-files-found: error
+      - name: Compare independent scanner evidence
+        id: comparison
+        run: >-
+          python3 scripts/compare_image_scans.py rag-grype.json rag-trivy.json
+          rag-image-identity.json rag-scan-comparison.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always() && (steps.comparison.outcome == 'success' || steps.comparison.outcome == 'failure')
+        with:
+          name: rag-scan-comparison-${{ github.sha }}
+          path: rag-scan-comparison.json
+          if-no-files-found: error
+      - name: Evaluate exact evidence-backed release dispositions
+        id: release_policy
+        continue-on-error: true
+        run: >-
+          python3 scripts/evaluate_release_findings.py
+          rag-grype.json rag-trivy.json rag-openssl-evidence.json
+          security/openssl-3.5.9-r1-dispositions.json rag-image-identity.json
+          rag-release-decisions.json rag-release.openvex.json
+      - name: Validate reviewed release OpenVEX against official schema
+        id: validate_release_vex
+        if: always() && (steps.release_policy.outcome == 'success' || steps.release_policy.outcome == 'failure')
+        continue-on-error: true
+        run: |
+          validator=ghcr.io/sourcemeta/jsonschema:v17.2.1@sha256:7f91686a3a13acf1306e4924b9e1c1d4a672a40846bf00fbd6a6630d282628f7
+          test -s rag-release.openvex.json
+          test -s openvex-0.2.0.schema.json
+          docker run --rm --platform linux/amd64 --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
+            --mount "type=bind,src=$PWD/openvex-0.2.0.schema.json,dst=/schema.json,readonly" \
+            --mount "type=bind,src=$PWD/rag-release.openvex.json,dst=/vex.json,readonly" \
+            "$validator" validate --format-assertion /schema.json /vex.json
+      - name: Bind final release decisions and VEX to reviewed full filesystem
+        run: >-
+          python3 scripts/verify_release_native_assurance.py
+          rag-native-inventory.json security/native-review-baseline.json
+          rag-image-identity.json rag-release-decisions.json rag-release.openvex.json
+          rag-native-release-binding.json
+      - name: Preserve release disposition evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rag-release-security-${{ github.sha }}
+          path: |
+            rag-openssl-evidence.json
+            rag-release-decisions.json
+            rag-release.openvex.json
+          if-no-files-found: warn
+      - name: Enforce combined fail-closed vulnerability gate
+        env:
+          POLICY_OUTCOME: ${{ steps.release_policy.outcome }}
+          VEX_OUTCOME: ${{ steps.validate_release_vex.outcome }}
+        run: |
+          [[ "$POLICY_OUTCOME" == success ]]
+          [[ "$VEX_OUTCOME" == success ]]
+      - name: Emit independent SPDX and CycloneDX inventories with verified Syft
+        run: |
+          syft "rag-candidate:${GITHUB_SHA}" -o spdx-json=rag.spdx.json
+          syft "rag-candidate:${GITHUB_SHA}" -o cyclonedx-json=rag.cdx.json
+          python3 -m json.tool rag.spdx.json >/dev/null
+          python3 -m json.tool rag.cdx.json >/dev/null
+      - name: Verify database freshness and independent inventory coverage
+        run: >-
+          python3 scripts/verify_scan_coverage.py rag-grype.json rag-trivy.json
+          rag-trivy-db.json rag.spdx.json rag.cdx.json rag-image-identity.json
+          rag-scan-coverage.json
       - run: |
-          docker image inspect --format '{{.Id}}' rag-candidate:${GITHUB_SHA} > rag-image.id
-          docker save rag-candidate:${GITHUB_SHA} | gzip > rag-image.tar.gz
-          sha256sum rag-image.tar.gz rag-image.id rag.spdx.json > SHA256SUMS
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          identity = json.loads(Path("rag-image-identity.json").read_text())
+          digest = hashlib.sha256()
+          with Path("rag-image.tar").open("rb") as stream:
+              for block in iter(lambda: stream.read(1024 * 1024), b""):
+                  digest.update(block)
+          assert "sha256:" + digest.hexdigest() == identity["archive_sha256"]
+          Path("rag-image.id").write_text(identity["config_digest"] + "\n")
+          PY
+          gzip -n -9 -c rag-image.tar > rag-image.tar.gz
+          sha256sum rag-image.tar.gz rag-image.id rag.spdx.json rag.cdx.json \
+            rag-build-metadata.json rag-image-identity.json rag-grype.json rag-trivy.json \
+            rag-scan-comparison.json rag-investigation.openvex.json rag-openssl-evidence.json \
+            rag-release-decisions.json rag-release.openvex.json rag-trivy-db.json rag-scan-coverage.json rag-native-inventory.json rag-native-release-binding.json rag-build-environment.json > SHA256SUMS
+      - name: Verify release checksum manifest
+        run: sha256sum --check SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: rag-candidate-${{ github.sha }}
@@ -55,12 +227,27 @@ jobs:
             rag-image.tar.gz
             rag-image.id
             rag.spdx.json
+            rag.cdx.json
+            rag-build-metadata.json
+            rag-image-identity.json
+            rag-grype.json
+            rag-trivy.json
+            rag-scan-comparison.json
+            rag-trivy-db.json
+            rag-scan-coverage.json
+            rag-native-inventory.json
+            rag-native-release-binding.json
+            rag-build-environment.json
+            rag-investigation.openvex.json
+            rag-openssl-evidence.json
+            rag-release-decisions.json
+            rag-release.openvex.json
             SHA256SUMS
           if-no-files-found: error
   attest:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       attestations: write
@@ -72,4 +259,4 @@ jobs:
       - run: sha256sum --check SHA256SUMS
       - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
         with:
-          subject-path: rag-image.tar.gz, rag-image.id, rag.spdx.json
+          subject-path: SHA256SUMS, rag-image.tar.gz, rag-image.id, rag.spdx.json, rag.cdx.json, rag-image-identity.json, rag-investigation.openvex.json, rag-release.openvex.json

@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "reference_commit": "8a86a184de9334cc2058d272ca054f953c1386ed",
+  "elf_count": 162,
+  "elf_inventory_sha256": "c9cce2622c96cab8e428973b1d385fba24abef9832f4295866c9db6c5accc135",
+  "python_source_count": 2052,
+  "python_inventory_sha256": "29280f8c446e4a67830bcdc3c2938833df754d93400b75a4fac7e00bc328119f",
+  "application_source_sha256": "sha256:35860690842f9140a8e5c8d9d25e7d7d06a71ad784d49c2dbfc368af032568eb",
+  "direct_consumers": [
+    "usr/bin/c_rehash",
+    "usr/bin/ssl_client",
+    "usr/lib/engines-3/afalg.so",
+    "usr/lib/engines-3/loader_attic.so",
+    "usr/lib/engines-3/padlock.so",
+    "usr/lib/krb5/plugins/preauth/spake.so",
+    "usr/lib/krb5/plugins/tls/k5tls.so",
+    "usr/lib/libapk.so.3.0.0",
+    "usr/lib/libssl.so.3",
+    "usr/lib/ossl-modules/legacy.so",
+    "usr/local/lib/python3.12/lib-dynload/_hashlib.cpython-312-x86_64-linux-musl.so",
+    "usr/local/lib/python3.12/lib-dynload/_ssl.cpython-312-x86_64-linux-musl.so"
+  ],
+  "effective_filesystem_entries": 5283,
+  "effective_filesystem_sha256": "513136db60bf2e08ff0d642f5d4c3842574e7d68f41626da6f9f1603056fad5f",
+  "reviewed_previous_archive_artifact_sha256": "af8300ff93a98c659f1e34977b986062f9ed920efe31a509a2993d1df8173224",
+  "reference_diagnostic_artifact_id": 15230518345,
+  "reference_diagnostic_artifact_sha256": "sha256:a3534c21efa485425d1acc30bcaae4d87f1d2e27eda9c08ded8ed38ab0f4ec99"
+}

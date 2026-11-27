@@ -11,8 +11,8 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.error
-import urllib.request
+import http.client
+from urllib.parse import urlsplit
 import uuid
 from pathlib import Path
 
@@ -26,6 +26,15 @@ def b64(value: bytes) -> bytes:
 
 
 def request(url, path, *, method="GET", token=None, body=None, content_type=None):
+    base = urlsplit(url)
+    route = urlsplit(path)
+    if (base.scheme != "http" or base.hostname not in {"127.0.0.1", "localhost", "::1"}
+            or base.port is None or base.username or base.password or base.query or base.fragment
+            or base.path not in {"", "/"}):
+        raise ValueError("smoke client requires an explicit loopback HTTP origin")
+    if (not path.startswith("/") or route.scheme or route.netloc or route.fragment
+            or route.path != path.split("?", 1)[0]):
+        raise ValueError("smoke client requires an origin-relative request path")
     headers = {}
     if token:
         headers["Authorization"] = "Bearer " + token
@@ -34,11 +43,16 @@ def request(url, path, *, method="GET", token=None, body=None, content_type=None
     if isinstance(body, dict):
         body = json.dumps(body).encode()
         headers["Content-Type"] = "application/json"
+    connection = http.client.HTTPConnection(base.hostname, base.port, timeout=12)
     try:
-        with urllib.request.urlopen(urllib.request.Request(url + path, body, headers, method=method), timeout=12) as result:
-            return result.status, json.loads(result.read()) if result.status != 204 else None
-    except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read())
+        connection.request(method, path, body=body, headers=headers)
+        response = connection.getresponse()
+        payload = response.read(2_097_153)
+        if len(payload) > 2_097_152:
+            raise RuntimeError("smoke response exceeds 2 MiB")
+        return response.status, json.loads(payload) if response.status != 204 else None
+    finally:
+        connection.close()
 
 
 def pdf_fixture() -> bytes:
