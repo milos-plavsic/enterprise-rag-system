@@ -11,7 +11,7 @@ defaults:
 jobs:
   evaluate:
     name: Evaluate ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -76,6 +76,8 @@ jobs:
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
         with:
           image: ${{ env.CANDIDATE }}
+          grype-version: "v0.110.0"
+          cache-db: false
           severity-cutoff: high
           fail-build: false
           output-format: json
@@ -96,6 +98,7 @@ jobs:
         with:
           image: ${{ env.CANDIDATE }}
           format: spdx-json
+          syft-version: "v1.42.3"
           output-file: evaluation/image.spdx.json
           upload-artifact: false
           upload-release-assets: false

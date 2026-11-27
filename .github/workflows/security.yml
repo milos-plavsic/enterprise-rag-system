@@ -8,7 +8,7 @@ permissions:
   contents: read
 jobs:
   static:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -21,16 +21,18 @@ jobs:
           python-version: "3.12"
       - run: >-
           python -m pip install --require-hashes --only-binary=:all: -r requirements-test.lock
-      - run: >-
-          pipx install ruff==0.17.6 &&
-          pipx install bandit==1.9.4 &&
-          pipx install pip-audit==2.10.1
+      - name: Install security tools and complete transitive lock
+        run: |
+          python -m venv "$RUNNER_TEMP/security-tools"
+          "$RUNNER_TEMP/security-tools/bin/python" -m pip --isolated install --ignore-installed --require-hashes --only-binary=:all: -r requirements-security-linux-py312.lock
+          "$RUNNER_TEMP/security-tools/bin/python" -m pip check
+          echo "$RUNNER_TEMP/security-tools/bin" >> "$GITHUB_PATH"
       - run: ruff check --select F app scripts reference *.py
       - run: bandit -q -r app scripts rag_service.py auth_oidc.py production_admin.py production_runtime.py production_store.py disaster_recovery.py document_source.py reference_answer.py reference_ranking.py pdf_daemon.py pdf_transport.py pdf_worker.py -ll
       - run: pip-audit --progress-spinner off --require-hashes -r requirements-runtime.lock
   codeql:
     name: CodeQL (Python)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       security-events: write
@@ -77,7 +79,7 @@ jobs:
     name: "CodeQL original TLS regression gate"
     needs: codeql
     if: always() && github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     permissions:
       contents: read
@@ -102,7 +104,7 @@ jobs:
     name: "CodeQL alert #2 fixed on main"
     needs: codeql
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     permissions:
       contents: read

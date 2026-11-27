@@ -11,12 +11,25 @@ permissions:
   contents: read
 jobs:
   image:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+      - name: Record runner and build tool environment
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          result = {"source_commit": os.environ["GITHUB_SHA"],
+                    "runner_image": os.environ.get("ImageOS", "unknown"),
+                    "runner_image_version": os.environ.get("ImageVersion", "unknown"),
+                    "docker": subprocess.check_output(["docker", "version"], text=True),
+                    "buildx": subprocess.check_output(["docker", "buildx", "version"], text=True),
+                    "dockerfile_frontend": Path("Dockerfile").read_text().splitlines()[0]}
+          Path("rag-build-environment.json").write_text(json.dumps(result, indent=2) + "\n")
+          PY
       - name: Build candidate and capture immutable Buildx metadata
         env:
           BUILDX_METADATA_PROVENANCE: max
@@ -203,7 +216,7 @@ jobs:
           sha256sum rag-image.tar.gz rag-image.id rag.spdx.json rag.cdx.json \
             rag-build-metadata.json rag-image-identity.json rag-grype.json rag-trivy.json \
             rag-scan-comparison.json rag-investigation.openvex.json rag-openssl-evidence.json \
-            rag-release-decisions.json rag-release.openvex.json rag-trivy-db.json rag-scan-coverage.json rag-native-inventory.json > SHA256SUMS
+            rag-release-decisions.json rag-release.openvex.json rag-trivy-db.json rag-scan-coverage.json rag-native-inventory.json rag-build-environment.json > SHA256SUMS
       - name: Verify release checksum manifest
         run: sha256sum --check SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -222,6 +235,7 @@ jobs:
             rag-trivy-db.json
             rag-scan-coverage.json
             rag-native-inventory.json
+            rag-build-environment.json
             rag-investigation.openvex.json
             rag-openssl-evidence.json
             rag-release-decisions.json
@@ -231,7 +245,7 @@ jobs:
   attest:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       attestations: write
