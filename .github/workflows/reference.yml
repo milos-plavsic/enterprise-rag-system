@@ -21,8 +21,10 @@ jobs:
         with:
           node-version: 24
       - run: npm ci --ignore-scripts --prefix .github/reference-browser
-      - name: Check Playwright harness syntax
-        run: node --check scripts/reference_browser.cjs
+      - name: Check Playwright and orchestration syntax
+        run: |
+          node --check scripts/reference_browser.cjs
+          bash -n scripts/reference_compose_smoke.sh
       - name: Scope browser dependency installation to signed Ubuntu sources
         run: |
           set -euo pipefail
@@ -78,8 +80,10 @@ jobs:
         with:
           node-version: 24
       - run: npm ci --ignore-scripts --prefix .github/reference-browser
-      - name: Check Playwright harness syntax
-        run: node --check scripts/reference_browser.cjs
+      - name: Check Playwright and orchestration syntax
+        run: |
+          node --check scripts/reference_browser.cjs
+          bash -n scripts/reference_compose_smoke.sh
       - name: Scope browser dependency installation to signed Ubuntu sources
         run: |
           set -euo pipefail

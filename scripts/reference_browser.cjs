@@ -59,7 +59,9 @@ const signIn = async (page, user, hash = '', expectCallback = true) => {
   // when the destination loaded successfully, so do not couple correctness to a
   // navigation event. Verify the actual loaded URL after the form is present.
   await page.locator('#username').waitFor({state:'visible',timeout:45000});
-  assert.ok(isIdpAuth(new URL(page.url())),`unexpected identity-provider URL ${page.url()}`);
+  const currentRoute = new URL(page.url());
+  assert.ok(isIdpAuth(currentRoute),
+    `unexpected identity-provider route: ${currentRoute.origin}${currentRoute.pathname}`);
   await page.locator('#username').fill(user);
   await page.locator('#password').fill(accounts[user].password);
   const submitted = page.waitForResponse(isCredentialPost,{timeout:45000});
@@ -390,6 +392,7 @@ function browserHome(name, trusted) {
   const options = {headless:true, ...(process.env.RAG_BROWSER_EXECUTABLE ? {executablePath:process.env.RAG_BROWSER_EXECUTABLE} : {})};
   // Use independent per-run NSS trust stores. Never modify global runner trust
   // and never use Playwright's blanket ignoreHTTPSErrors option.
+  console.log('PHASE: browser certificate trust verification');
   const untrustedHome = browserHome('browser-untrusted',false);
   const trustedHome = browserHome('browser-trusted',true);
   await waitForStableHostNetwork();
@@ -420,6 +423,7 @@ function browserHome(name, trusted) {
       page.setDefaultNavigationTimeout(45000);
       return page;
     };
+    console.log('PHASE: authenticated document and citation lifecycle');
     let page = await fresh();
     await signIn(page, 'avery');
     await page.getByText('Signed in.', {exact:true}).waitFor();
@@ -450,6 +454,7 @@ function browserHome(name, trusted) {
     await expectCitationHash(page,oldLink,403,'Access is no longer available.');
     page = await fresh();
     await expectCitationAfterSignIn(page,'robin',currentLink,404,'This passage is unavailable.');
+    console.log('PHASE: fail-closed restored-grants reconciliation');
     publish(3);
     compose('stop','api');
     offlineAdmin('--database','/var/lib/rag/lab-backup.sqlite3','quarantine-restored-grants');
@@ -465,6 +470,7 @@ function browserHome(name, trusted) {
     page = await fresh();
     await expectCitationAfterSignIn(page,'avery',currentLink,404,'This passage is unavailable.');
     console.log('PASS: Keycloak sign-in, document update, live links, denial, withdrawal and reconciled restore.');
+    console.log('PHASE: signing-key rollover and live-session security');
     operatorLogin();
     const oldKid = activeSigningKey();
     assert.equal(typeof oldKid,'string');
@@ -500,6 +506,7 @@ function browserHome(name, trusted) {
     await expectRotatedSignIn(page,newKid);
     await queryOffice(page);
     console.log('PASS: freshly rotated Keycloak signing key works with a cold verifier.');
+    console.log('PHASE: role-change and disabled-account denial');
     const profilePath = 'users/profile';
     const profile = JSON.parse(docker(['exec','-T','idp','/opt/keycloak/bin/kcadm.sh','get',profilePath,'-r','juniper'],true));
     // Manage this claim explicitly. Never allow the end user to set their own role.
@@ -527,6 +534,7 @@ function browserHome(name, trusted) {
     // Restart the API process during the outage to remove cached signing keys.
     // Do not recreate its network endpoint: the security condition is an empty
     // verifier cache while the IdP is unavailable, not a new container identity.
+    console.log('PHASE: uncached IdP outage readiness');
     compose('stop','idp');
     compose('restart','api');
     await waitForStatus('/health',200);

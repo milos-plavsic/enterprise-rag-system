@@ -21,7 +21,7 @@ not just the workflow filenames. Execute the validator with read-only
 repository, Actions and checks access:
 
 ```bash
-python3 verify_trusted_acceptance.py 10 --approved-head "$REVIEWED_HEAD" --approved-base "$REVIEWED_BASE"
+python3 verify_trusted_acceptance.py 12 --approved-head "$REVIEWED_HEAD" --approved-base "$REVIEWED_BASE"
 ```
 
 The program checks current PR identity, merge ancestry, base protection,
@@ -50,3 +50,7 @@ this document or unit tests as proof that live external enforcement exists.
 
 References: [GitHub ruleset workflow rules](https://docs.github.com/en/enterprise-cloud@latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets),
 [GitHub Actions secure use](https://docs.github.com/en/actions/reference/security/secure-use).
+
+## PR identity boundary
+
+The original TLS PR is #10; the remediation candidate is PR #12. Independent approval must bind the exact PR #12 head and base to independently controlled evidence. Passing candidate-defined Actions checks does not authorize merging a draft PR.
