@@ -1,0 +1,44 @@
+name: Resolve security build materials (review branch only)
+on:
+  push:
+    branches: ["hardening/pr10-independent-review-remediation"]
+permissions:
+  contents: read
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Resolve binary-only wheels without installing them
+        run: |
+          set -euo pipefail
+          python -m pip --isolated install --dry-run --ignore-installed --only-binary=:all: --index-url https://pypi.org/simple --report resolution.json ruff==0.17.6 bandit==1.9.4 pip-audit==2.10.1
+          python - <<'PY'
+          import json, re
+          from urllib.parse import urlsplit
+          rows = []
+          for item in json.load(open("resolution.json"))["install"]:
+              name = re.sub(r"[-_.]+", "-", item["metadata"]["name"]).lower()
+              version = item["metadata"]["version"]
+              info = item["download_info"]
+              assert urlsplit(info["url"]).scheme == "https"
+              assert urlsplit(info["url"]).hostname == "files.pythonhosted.org"
+              digest = info["archive_info"]["hashes"]["sha256"]
+              assert re.fullmatch(r"[a-f0-9]{64}", digest)
+              rows.append(f"{name}=={version} --hash=sha256:{digest}")
+          print("LOCK_BEGIN")
+          print("\n".join(sorted(rows)))
+          print("LOCK_END")
+          PY
+      - name: Resolve upstream Dockerfile frontend and Alpine package hashes
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect docker/dockerfile:1
+          for pkg in libcrypto3 libssl3; do
+            curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --max-time 60 --output "$pkg.apk" "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/$pkg-3.5.9-r1.apk"
+            sha256sum "$pkg.apk"
+          done
+          docker run --rm --network none --mount "type=bind,src=$PWD,dst=/materials,readonly" --entrypoint apk python:3.12-alpine3.24@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89 verify /materials/libcrypto3.apk /materials/libssl3.apk
