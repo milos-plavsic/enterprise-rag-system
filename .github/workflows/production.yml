@@ -54,13 +54,16 @@ jobs:
           rag-candidate:${GITHUB_SHA} rag-image.tar rag-image-identity.json
       - name: Collect isolated OpenSSL reachability evidence
         run: |
-          docker image inspect rag-candidate:${GITHUB_SHA} > rag-image-inspect.json
+          image_id=$(python3 -c 'import json; print(json.load(open("rag-image-identity.json"))["config_digest"])')
+          docker image inspect "$image_id" > rag-image-inspect.json
           docker run --rm --network none --read-only --cap-drop ALL \
             --security-opt no-new-privileges:true --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
             --entrypoint python \
             --mount "type=bind,src=$PWD/scripts/openssl_reachability.py,dst=/reachability.py,readonly" \
             --mount "type=bind,src=$PWD/rag-image-inspect.json,dst=/image-inspect.json,readonly" \
-            rag-candidate:${GITHUB_SHA} /reachability.py /image-inspect.json - > rag-openssl-evidence.json
+            --mount "type=bind,src=$PWD/rag-image-identity.json,dst=/identity.json,readonly" \
+            --mount "type=bind,src=$PWD/security/openssl-3.5.9-r1-dispositions.json,dst=/policy.json,readonly" \
+            "$image_id" /reachability.py /image-inspect.json /identity.json /policy.json - > rag-openssl-evidence.json
       - name: Generate deterministic OpenVEX investigation evidence
         run: >-
           python3 scripts/openvex_inventory.py rag-grype.json rag-image-identity.json

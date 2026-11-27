@@ -15,11 +15,39 @@ from pathlib import Path
 BLOCKING = {"high", "critical", "unknown"}
 SEVERITIES = {"negligible", "low", "medium", "high", "critical", "unknown"}
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
-EXPECTED_OPENSSL_CVES = frozenset({
-    "CVE-2026-84785", "CVE-2026-107494", "CVE-2026-121482",
-    "CVE-2026-84786", "CVE-2026-107493", "CVE-2026-124709",
-    "CVE-2026-35190",
-})
+EXPECTED_INVARIANTS = {
+    "CVE-2026-84785": {"no_quic_stack"},
+    "CVE-2026-107494": {"no_quic_stack"},
+    "CVE-2026-121482": {"no_cms_pkcs7_api", "no_crl_check_configuration"},
+    "CVE-2026-84786": {"no_dane_api"},
+    "CVE-2026-107493": {"no_direct_pem_stack_api", "python_tls_ca_loader_only"},
+    "CVE-2026-124709": {"no_quic_stack"},
+    "CVE-2026-35190": {"no_suite_b_certificate_flag"},
+}
+EXPECTED_OPENSSL_CVES = frozenset(EXPECTED_INVARIANTS)
+BINDING_KEYS = ("config_digest", "manifest_digest", "archive_sha256", "source_commit",
+                "source_tree_sha256", "collector_sha256", "policy_sha256")
+
+
+def verify_evidence_binding(evidence: dict, policy: dict, identity: dict) -> None:
+    binding = evidence.get("image_binding")
+    if not isinstance(binding, dict) or set(binding) != set(BINDING_KEYS):
+        raise ValueError("runtime evidence binding missing or incomplete")
+    for key in BINDING_KEYS:
+        value = identity.get(key)
+        pattern = r"[a-f0-9]{40}" if key == "source_commit" else DIGEST
+        if not isinstance(value, str) or not re.fullmatch(pattern, value) or binding[key] != value:
+            raise ValueError(f"runtime evidence binding mismatch: {key}")
+    if evidence.get("source_tree_sha256") != binding["source_tree_sha256"]:
+        raise ValueError("runtime source digest mismatch")
+    if identity.get("image_reference") != "rag-candidate:" + binding["source_commit"]:
+        raise ValueError("source commit and image reference mismatch")
+    actual_policy_hash = "sha256:" + hashlib.sha256(
+        json.dumps(policy, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    if actual_policy_hash != binding["policy_sha256"]:
+        raise ValueError("disposition policy digest mismatch")
+
 
 
 def severity(value: object) -> str:
@@ -37,6 +65,8 @@ def _policy(policy: dict, evidence: dict) -> tuple[dict, set[str]]:
     packages = component.get("packages")
     if not isinstance(packages, list) or not packages or any(not isinstance(p, str) for p in packages):
         raise ValueError("component packages missing")
+    if len(packages) != 2 or set(packages) != {"libcrypto3", "libssl3"}:
+        raise ValueError("unexpected OpenSSL component package scope")
     if component.get("version") != "3.5.9-r1" or component.get("type") != "apk":
         raise ValueError("unexpected OpenSSL disposition scope")
     runtime_packages = evidence.get("packages")
@@ -61,8 +91,9 @@ def _policy(policy: dict, evidence: dict) -> tuple[dict, set[str]]:
         if disposition.get("justification") != "vulnerable_code_not_in_execute_path":
             raise ValueError("unexpected VEX justification")
         required = disposition.get("required_invariants")
-        if not isinstance(required, list) or not required:
-            raise ValueError("disposition lacks runtime invariants")
+        if (not isinstance(required, list) or any(not isinstance(name, str) for name in required)
+                or len(required) != len(set(required)) or set(required) != EXPECTED_INVARIANTS[cve]):
+            raise ValueError("disposition invariant mapping differs from reviewed scope")
         if any(invariants.get(name) is not True for name in required):
             raise ValueError(f"runtime evidence does not satisfy {cve}")
         impact = disposition.get("impact_statement")
@@ -115,6 +146,7 @@ def _trivy_rows(report: dict) -> list[dict]:
 
 def evaluate(grype: dict, trivy: dict, evidence: dict, policy: dict, identity: dict) -> dict:
     dispositions, packages = _policy(policy, evidence)
+    verify_evidence_binding(evidence, policy, identity)
     config = identity.get("config_digest")
     manifest = identity.get("manifest_digest")
     if not isinstance(config, str) or not DIGEST.fullmatch(config):
@@ -166,6 +198,7 @@ def release_vex(policy: dict, evidence: dict, identity: dict, policy_sha256: str
     if not DIGEST.fullmatch(policy_sha256) or not DIGEST.fullmatch(generator_sha256):
         raise ValueError("invalid policy or generator digest")
     dispositions, packages = _policy(policy, evidence)
+    verify_evidence_binding(evidence, policy, identity)
     manifest = identity["manifest_digest"]
     product = {
         "@id": identity["product_id"],

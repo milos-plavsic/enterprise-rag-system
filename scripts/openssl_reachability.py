@@ -77,12 +77,25 @@ def exact_apk(package: str, version: str) -> bool:
 
 
 def main() -> None:
-    if len(sys.argv) != 3:
-        raise SystemExit("usage: openssl_reachability.py IMAGE_INSPECT_JSON OUTPUT_JSON")
-    inspect_path, output_path = map(Path, sys.argv[1:])
+    if len(sys.argv) != 5:
+        raise SystemExit("usage: openssl_reachability.py IMAGE_INSPECT_JSON IDENTITY_JSON POLICY_JSON OUTPUT_JSON")
+    inspect_path, identity_path, policy_path, output_path = map(Path, sys.argv[1:])
+    identity = json.loads(identity_path.read_bytes())
+    policy = json.loads(policy_path.read_bytes())
+    binding_keys = ("config_digest", "manifest_digest", "archive_sha256", "source_commit",
+                    "source_tree_sha256", "collector_sha256", "policy_sha256")
+    binding = {key: identity[key] for key in binding_keys}
+    collector_hash = "sha256:" + hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    policy_hash = "sha256:" + hashlib.sha256(
+        json.dumps(policy, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    if collector_hash != binding["collector_sha256"] or policy_hash != binding["policy_sha256"]:
+        raise RuntimeError("collector or disposition policy differs from exact Git tree")
     image = json.loads(inspect_path.read_text(encoding="utf-8"))
     if not isinstance(image, list) or len(image) != 1:
         raise RuntimeError("unexpected Docker image inspect payload")
+    if image[0].get("Id") != binding["config_digest"]:
+        raise RuntimeError("runtime image configuration differs from verified candidate")
     config = image[0].get("Config", {})
     command = config.get("Cmd")
     if not isinstance(command, list):
@@ -95,6 +108,8 @@ def main() -> None:
         raise RuntimeError("production HTTP protocol is not h11")
 
     source, source_digest = app_sources()
+    if source_digest != binding["source_tree_sha256"]:
+        raise RuntimeError("runtime source differs from immutable Git source tree")
     markers = {
         name: sorted(marker for marker in values if marker in source)
         for name, values in SOURCE_MARKERS.items()
@@ -162,6 +177,7 @@ def main() -> None:
 
     evidence = {
         "schema": 1,
+        "image_binding": binding,
         "source_tree_sha256": source_digest,
         "python": sys.version,
         "openssl": openssl_version,

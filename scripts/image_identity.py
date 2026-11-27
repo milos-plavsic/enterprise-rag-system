@@ -16,8 +16,10 @@ import tarfile
 
 if __package__:
     from .oci_integrity import verify_oci_archive
+    from .release_source_identity import source_receipt
 else:
     from oci_integrity import verify_oci_archive
+    from release_source_identity import source_receipt
 from pathlib import Path, PurePosixPath
 
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -225,6 +227,7 @@ def main() -> None:
         args.image_reference,
         archive_receipt,
     )
+    receipt.update(source_receipt(args.image_reference))
     args.output.write_text(
         json.dumps(receipt, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

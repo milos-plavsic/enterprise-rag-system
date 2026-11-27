@@ -15,6 +15,12 @@ GENERATOR = "sha256:" + "e" * 64
 def identity():
     return {
         "config_digest": CONFIG,
+        "archive_sha256": "sha256:" + "1" * 64,
+        "source_commit": "2" * 40,
+        "source_tree_sha256": "sha256:" + "c" * 64,
+        "collector_sha256": "sha256:" + "3" * 64,
+        "policy_sha256": "sha256:" + hashlib.sha256(json.dumps(policy(), sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+        "image_reference": "rag-candidate:" + "2" * 40,
         "manifest_digest": MANIFEST,
         "scanner_manifest_digest": SCANNER_MANIFEST,
         "product_id": (
@@ -28,6 +34,10 @@ def evidence():
     return {
         "schema": 1,
         "source_tree_sha256": "sha256:" + "c" * 64,
+        "image_binding": {key: identity()[key] for key in (
+            "config_digest", "manifest_digest", "archive_sha256", "source_commit",
+            "source_tree_sha256", "collector_sha256", "policy_sha256",
+        )},
         "packages": {"libcrypto3": "3.5.9-r1", "libssl3": "3.5.9-r1"},
         "invariants": {
             "no_quic_stack": True,
@@ -268,3 +278,35 @@ def test_canonical_manifest_remains_distinct_from_scanner_reconstruction():
     assert decisions["scanner_manifest_digest"] == SCANNER_MANIFEST
     vex = release_vex(policy(), evidence(), identity(), GENERATOR, GENERATOR)
     assert vex["statements"][0]["products"][0]["hashes"]["sha-256"] == MANIFEST[7:]
+
+
+@pytest.mark.parametrize("field", [
+    "config_digest", "manifest_digest", "archive_sha256", "source_commit",
+    "source_tree_sha256", "collector_sha256", "policy_sha256",
+])
+def test_valid_but_mismatched_runtime_binding_rejected(field):
+    stale = evidence()
+    stale["image_binding"][field] = ("9" * 40 if field == "source_commit" else "sha256:" + "9" * 64)
+    with pytest.raises(ValueError, match="binding mismatch"):
+        evaluate(grype(gmatch()), trivy(), stale, policy(), identity())
+
+
+def test_changed_policy_invariant_mapping_is_rejected():
+    modified = policy()
+    modified["dispositions"]["CVE-2026-121482"]["required_invariants"] = ["no_crl_check_configuration"]
+    with pytest.raises(ValueError, match="invariant mapping"):
+        evaluate(grype(gmatch()), trivy(), evidence(), modified, identity())
+
+
+def test_valid_but_unrelated_source_digest_is_rejected():
+    stale = evidence()
+    stale["source_tree_sha256"] = "sha256:" + "9" * 64
+    with pytest.raises(ValueError, match="source digest mismatch"):
+        evaluate(grype(gmatch()), trivy(), stale, policy(), identity())
+
+
+def test_changed_policy_content_is_rejected():
+    modified = policy()
+    modified["dispositions"]["CVE-2026-121482"]["impact_statement"] = "Different reasoning"
+    with pytest.raises(ValueError, match="policy digest mismatch"):
+        evaluate(grype(gmatch()), trivy(), evidence(), modified, identity())
