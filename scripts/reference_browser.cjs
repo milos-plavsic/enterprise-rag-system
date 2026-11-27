@@ -1,6 +1,6 @@
 'use strict';
 const { chromium } = require('playwright');
-const { readFileSync } = require('node:fs');
+const { readFileSync, mkdirSync } = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const https = require('node:https');
 const assert = require('node:assert/strict');
@@ -14,7 +14,9 @@ const idpRealm = '/realms/juniper';
 const accounts = JSON.parse(readFileSync(path.join(directory, 'keycloak/accounts.json')));
 const probe = JSON.parse(readFileSync(path.join(directory, 'keycloak/probe.json')));
 const labCa = readFileSync(path.join(directory,'cert.pem'));
-const prefix = ['compose', '--env-file', path.join(directory, 'compose.env'), '-p', 'juniper-reference', '-f', 'compose.production.yml', '-f', 'compose.reference.yml'];
+const project = process.env.RAG_LAB_PROJECT;
+assert.match(project || '', /^juniper-reference-[a-f0-9]{12}$/);
+const prefix = ['compose', '--env-file', path.join(directory, 'compose.env'), '-p', project, '-f', 'compose.production.yml', '-f', 'compose.reference.yml'];
 function docker(args, capture = false, input) {
   const result = spawnSync('docker', [...prefix, ...args], {stdio: [input === undefined ? 'ignore' : 'pipe',capture ? 'pipe' : 'inherit','inherit'], input, encoding:'utf8',timeout:90000});
   assert.equal(result.status, 0, `compose command failed: ${args[0]}`);
@@ -56,6 +58,45 @@ const signIn = async (page, user, hash = '', expectCallback = true) => {
   return {credentialResponse};
 };
 const citationUrl = hash => origin + hash.slice(1);
+async function assertDeniedResponse(page, response, expectedStatus) {
+  assert.equal(response.status(), expectedStatus);
+  const expected = expectedStatus === 403 ? 'access denied' : 'passage not found';
+  assert.equal(response.headers()['cache-control'], 'no-store');
+  assert.deepEqual(await response.json(), {detail:expected},
+    'Denial response must not include protected content or metadata');
+  assert.equal(await page.locator('#results').locator('*').count(), 0,
+    'Denied navigation must clear all previously rendered passage elements');
+  const persisted = await page.evaluate(() => ({
+    local:Object.keys(localStorage), session:Object.keys(sessionStorage),
+  }));
+  assert.deepEqual(persisted,{local:[],session:[]},
+    'The reference app must not persist bearer tokens or document state');
+}
+async function signInWithKey(page, user, expectedKid) {
+  let exchange;
+  const onResponse = response => {
+    if (response.request().method() === 'POST' &&
+        response.url() === idpOrigin + idpRealm + '/protocol/openid-connect/token') exchange = response;
+  };
+  page.on('response',onResponse);
+  try {
+    await signIn(page,user);
+    assert.ok(exchange && exchange.status() === 200, 'Missing successful browser token exchange');
+    const payload = await exchange.json();
+    assert.equal(typeof payload.access_token, 'string');
+    const header = JSON.parse(Buffer.from(payload.access_token.split('.')[0],'base64url').toString('utf8'));
+    assert.equal(header.alg,'RS256');
+    assert.equal(header.kid,expectedKid,'Browser token must use the expected signing key');
+  } finally { page.off('response',onResponse); }
+}
+async function queryOffice(page) {
+  await page.locator('#question').fill('Which day are office supply orders consolidated?');
+  const result = page.waitForResponse(response => response.request().method() === 'POST' &&
+    response.url() === origin + '/v1/query');
+  await page.getByRole('button',{name:'Search',exact:true}).click();
+  assert.equal((await result).status(),200);
+  await page.getByText(/consolidated every Tuesday/).first().waitFor();
+}
 async function expectCitationAfterSignIn(page, user, hash, expectedStatus, message) {
   assert.ok(hash.startsWith('#/v1/documents/'), `unexpected citation hash ${hash}`);
   const matched = [];
@@ -66,7 +107,7 @@ async function expectCitationAfterSignIn(page, user, hash, expectedStatus, messa
   const onResponse = response => {
     const url = new URL(response.url());
     if (response.request().method() === 'GET' && response.url() === citationUrl(hash)) {
-      matched.push(response.status());
+      matched.push(response);
     }
     if (url.origin === origin || url.origin === idpOrigin) {
       const isAuth = url.origin === idpOrigin &&
@@ -93,8 +134,9 @@ async function expectCitationAfterSignIn(page, user, hash, expectedStatus, messa
     // The application only displays this message after its OAuth callback
     // and the citation request have actually run.
     await page.getByText(message,{exact:true}).waitFor({timeout:45000});
-    assert.deepEqual(matched,[expectedStatus],
+    assert.deepEqual(matched.map(response => response.status()),[expectedStatus],
       'Authenticated browser citation must return exactly the expected status');
+    await assertDeniedResponse(page,matched[0],expectedStatus);
   } catch (error) {
     const status = await page.locator('#status').textContent({timeout:1000}).catch(() => null);
     const known = ['Signed in.','Sign-in could not be verified. Start again.',
@@ -103,7 +145,7 @@ async function expectCitationAfterSignIn(page, user, hash, expectedStatus, messa
     const statusKind = status === null ? 'unavailable' :
       known.includes(status.trim()) ? status.trim() : 'other';
     throw Error('Authenticated deep-link verification failed: ' + JSON.stringify({
-      errorType:error.name,statusKind,matched,expectedStatus,observations:observed,
+      errorType:error.name,statusKind,matched:matched.map(response => response.status()),expectedStatus,observations:observed,
     }),{cause:error});
   } finally {
     page.off('response',onResponse);
@@ -121,6 +163,7 @@ async function expectCitationHash(page, hash, expectedStatus, message) {
   assert.equal(result.status(),expectedStatus,
     `citation ${hash} returned ${result.status()}, expected ${expectedStatus}`);
   await page.getByText(message,{exact:true}).waitFor({timeout:15000});
+  await assertDeniedResponse(page,result,expectedStatus);
 }
 const operator = (...args) => compose('exec','-T','idp','/opt/keycloak/bin/kcadm.sh',...args);
 const activeSigningKey = () => JSON.parse(docker(['exec','-T','idp','/opt/keycloak/bin/kcadm.sh','get','keys','-r','juniper'],true)).active.RS256;
@@ -207,7 +250,7 @@ async function waitForIssuedSigningKey(kid, timeoutMs = 30000) {
   }
   throw Error(`Rotated signing key did not issue a probe token within 30 seconds (last status: ${lastStatus}).`);
 }
-async function expectRotatedSignIn(page) {
+async function expectRotatedSignIn(page, expectedKid) {
   // Record status codes, route paths and error categories only. Never log OAuth
   // query strings, authorization codes, bearer tokens or request/response bodies.
   const observed = [];
@@ -231,7 +274,7 @@ async function expectRotatedSignIn(page) {
   page.on('requestfailed',onFailure);
   page.on('pageerror',onPageError);
   try {
-    await signIn(page,'avery');
+    await signInWithKey(page,'avery',expectedKid);
   } catch (error) {
     const status = await page.locator('#status').textContent({timeout:1000}).catch(() => null);
     const known = ['Signed in.','Sign-in could not be verified. Start again.',
@@ -314,8 +357,34 @@ async function waitForBrowserNetwork(context, timeoutMs = 45000) {
   throw Error('Chromium could not establish stable IdP and application connectivity.');
 }
 
+function browserHome(name, trusted) {
+  const home = path.join(directory,name);
+  const database = path.join(home,'.pki','nssdb');
+  mkdirSync(database,{recursive:true,mode:0o700});
+  const certutil = (...args) => {
+    const result = spawnSync('certutil',[...args,'-d','sql:'+database],{encoding:'utf8',timeout:10000});
+    assert.equal(result.status,0,'NSS trust database operation failed');
+  };
+  certutil('-N','--empty-password');
+  if (trusted) certutil('-A','-n','Juniper disposable lab CA','-t','C,,','-i',path.join(directory,'cert.pem'));
+  return home;
+}
 (async () => {
   const options = {headless:true, ...(process.env.RAG_BROWSER_EXECUTABLE ? {executablePath:process.env.RAG_BROWSER_EXECUTABLE} : {})};
+  // Use independent per-run NSS trust stores. Never modify global runner trust
+  // and never use Playwright's blanket ignoreHTTPSErrors option.
+  const untrustedHome = browserHome('browser-untrusted',false);
+  const trustedHome = browserHome('browser-trusted',true);
+  await waitForStableHostNetwork();
+  const untrusted = await chromium.launch({...options,env:{...process.env,HOME:untrustedHome}});
+  try {
+    const context = await untrusted.newContext();
+    const page = await context.newPage();
+    await assert.rejects(page.goto(idpOrigin + idpRealm + '/.well-known/openid-configuration',
+      {waitUntil:'domcontentloaded',timeout:15000}),/ERR_CERT_AUTHORITY_INVALID|ERR_CERT_INVALID/,
+      'An untrusted IdP certificate must be rejected by Chromium');
+  } finally { await untrusted.close(); }
+  console.log('PASS: Chromium rejects untrusted IdP certificate.');
   let browser;
   try {
     // Docker Compose changes host network interfaces. A new browser context
@@ -326,9 +395,8 @@ async function waitForBrowserNetwork(context, timeoutMs = 45000) {
     const fresh = async () => {
       if (browser) await browser.close();
       await waitForStableHostNetwork();
-      browser = await chromium.launch(options);
-      // The lab uses a disposable local certificate. curl checks its exact CA separately.
-      const context = await browser.newContext({ignoreHTTPSErrors:true});
+      browser = await chromium.launch({...options,env:{...process.env,HOME:trustedHome}});
+      const context = await browser.newContext();
       await waitForBrowserNetwork(context);
       const page = await context.newPage();
       page.setDefaultTimeout(30000);
@@ -357,8 +425,7 @@ async function waitForBrowserNetwork(context, timeoutMs = 45000) {
     await page.getByText('Current authorised passage.', {exact:true}).waitFor();
     const currentLink = new URL(page.url()).hash;
     assert.notEqual(oldLink,currentLink);
-    await page.evaluate(hash => { location.hash = hash; }, oldLink);
-    await page.getByText('This passage is unavailable.', {exact:true}).waitFor();
+    await expectCitationHash(page,oldLink,404,'This passage is unavailable.');
     await page.evaluate(hash => { location.hash = hash; }, currentLink);
     await page.getByText('Current authorised passage.', {exact:true}).waitFor();
     admin('backup','/var/lib/rag/lab-backup.sqlite3');
@@ -384,6 +451,10 @@ async function waitForBrowserNetwork(context, timeoutMs = 45000) {
     operatorLogin();
     const oldKid = activeSigningKey();
     assert.equal(typeof oldKid,'string');
+    page = await fresh();
+    await signInWithKey(page,'avery',oldKid);
+    await queryOffice(page);
+    const warmedAt = Date.now();
     const realm = JSON.parse(docker(['exec','-T','idp','/opt/keycloak/bin/kcadm.sh','get','realms/juniper'],true));
     operator('create','components','-r','juniper','-s',`parentId=${realm.id}`,'-s','name=lab-rollover',
       '-s','providerId=rsa-generated','-s','providerType=org.keycloak.keys.KeyProvider',
@@ -393,16 +464,24 @@ async function waitForBrowserNetwork(context, timeoutMs = 45000) {
     assert.notEqual(newKid,oldKid);
     await waitForPublishedSigningKey(newKid);
     await waitForIssuedSigningKey(newKid);
+    // The existing access token remains valid during overlapping published keys.
+    await queryOffice(page);
+    // Respect the verifier's bounded unknown-key refresh cooldown; do not retry
+    // an authentication failure or restart the API for the live rollover test.
+    const cooldownRemaining = 16000 - (Date.now() - warmedAt);
+    if (cooldownRemaining > 0) await new Promise(resolve => setTimeout(resolve,cooldownRemaining));
+    page = await fresh();
+    await expectRotatedSignIn(page,newKid);
+    await queryOffice(page);
+    console.log('PASS: warm verifier accepts new signing key without restart and preserves valid old session.');
     // A process restart is sufficient to clear the verifier's in-memory JWKS cache.
     // Preserve the container/network endpoint so Chromium does not observe an
     // unrelated Docker topology change during the authentication assertion.
     compose('restart','api');
     await waitForStatus('/ready',200,90000);
     page = await fresh();
-    await expectRotatedSignIn(page);
-    await page.locator('#question').fill('Which day are office supply orders consolidated?');
-    await page.getByRole('button',{name:'Search',exact:true}).click();
-    await page.getByText(/consolidated every Tuesday/).first().waitFor();
+    await expectRotatedSignIn(page,newKid);
+    await queryOffice(page);
     console.log('PASS: freshly rotated Keycloak signing key works with a cold verifier.');
     const profilePath = 'users/profile';
     const profile = JSON.parse(docker(['exec','-T','idp','/opt/keycloak/bin/kcadm.sh','get',profilePath,'-r','juniper'],true));

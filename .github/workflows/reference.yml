@@ -21,6 +21,11 @@ jobs:
       - name: Check Playwright harness syntax
         run: node --check scripts/reference_browser.cjs
       - run: .github/reference-browser/node_modules/.bin/playwright install --with-deps chromium
+      - name: Install NSS certificate trust tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libnss3-tools
+          certutil -H > /dev/null 2>&1 || test -x "$(command -v certutil)"
       - run: docker build --platform linux/amd64 -t juniper-rag:local .
       - name: Verify reference identity and document lifecycle in Chromium
         env:

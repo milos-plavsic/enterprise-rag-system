@@ -5,6 +5,7 @@ IdP configuration, identity governance, TLS, or organisational role policy.
 """
 from __future__ import annotations
 import os
+import time
 from urllib.parse import urlparse
 from urllib.request import build_opener, HTTPRedirectHandler, HTTPSHandler, ProxyHandler
 from urllib.error import HTTPError
@@ -21,6 +22,12 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 class BoundedJWKSClient(PyJWKClient):
+    def get_jwk_set(self, refresh=False):
+        # PyJWT 2.15.1 serializes signing-key lookup with this RLock. Use the
+        # same lock for readiness and direct set fetches so they cannot race.
+        with self._client_lock:
+            return super().get_jwk_set(refresh=refresh)
+
     def fetch_data(self):
         try:
             with build_opener(ProxyHandler({}), HTTPSHandler(), NoRedirect()).open(
@@ -37,7 +44,16 @@ class BoundedJWKSClient(PyJWKClient):
             raise PyJWKClientError("invalid JWKS response") from exc
         if not isinstance(keys, list) or not 1 <= len(keys) <= 32 or any(not isinstance(k, dict) for k in keys):
             raise PyJWKClientError("invalid JWKS key set")
-        return {"keys": keys}
+        parsed = jwt.PyJWKSet.from_dict({"keys": keys})
+        signing_ids = [key.key_id for key in parsed.keys
+                       if key.public_key_use in ("sig", None) and key.key_id]
+        if not signing_ids or len(signing_ids) != len(set(signing_ids)):
+            raise PyJWKClientError("missing or duplicate JWKS signing key IDs")
+        # The base get_jwk_set caches the parsed set. This subclass must also
+        # preserve the pinned library cooldown semantics for initial and
+        # expiry fetches, without clearing valid cached keys on failure.
+        self._last_successful_fetch = time.monotonic()
+        return parsed
 
 
 class OIDCAuthenticator:

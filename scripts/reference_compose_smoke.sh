@@ -2,15 +2,22 @@
 set -euo pipefail
 lab=$1
 export RAG_LAB_PATH=$lab
+export RAG_LAB_PROJECT="juniper-reference-$(printf '%s' "$lab" | sha256sum | cut -c1-12)"
 python3 scripts/reference_lab.py prepare "$lab"
 # Only the lab runtime account can write the database; don't loosen host path permissions.
 sudo chown 10001:10001 "$lab/data"
-rag=(docker compose --env-file "$lab/compose.env" -p juniper-reference -f compose.production.yml -f compose.reference.yml)
+rag=(docker compose --env-file "$lab/compose.env" -p "$RAG_LAB_PROJECT" -f compose.production.yml -f compose.reference.yml)
 cleanup() {
   rc=$?
   if ((rc)); then "${rag[@]}" logs --no-color --tail 60 >&2 || true; fi
   if ! "${rag[@]}" --profile local-model down -v --remove-orphans; then
     echo "Reference lab cleanup failed" >&2
+    if ((rc == 0)); then rc=1; fi
+  fi
+  if [[ -n "$(docker ps -aq --filter "label=com.docker.compose.project=$RAG_LAB_PROJECT")" ||
+        -n "$(docker network ls -q --filter "label=com.docker.compose.project=$RAG_LAB_PROJECT")" ||
+        -n "$(docker volume ls -q --filter "label=com.docker.compose.project=$RAG_LAB_PROJECT")" ]]; then
+    echo "Reference lab left project resources behind" >&2
     if ((rc == 0)); then rc=1; fi
   fi
   exit "$rc"

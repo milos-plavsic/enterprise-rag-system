@@ -81,8 +81,8 @@ def test_explicit_minimum(server_context):
 @pytest.mark.parametrize("version", [ssl.TLSVersion.TLSv1_2, ssl.TLSVersion.TLSv1_3])
 def test_modern_tls_handshake(server_context, version):
     context, cert_path = server_context
-    if version == ssl.TLSVersion.TLSv1_3 and not ssl.HAS_TLSv1_3:
-        pytest.skip("OpenSSL has no TLS 1.3 support")
+    if version == ssl.TLSVersion.TLSv1_3:
+        assert ssl.HAS_TLSv1_3, "Supported CI runtime must negotiate TLS 1.3"
     client = ssl.create_default_context(cafile=str(cert_path))
     client.minimum_version = client.maximum_version = version
     expected = {ssl.TLSVersion.TLSv1_2: "TLSv1.2", ssl.TLSVersion.TLSv1_3: "TLSv1.3"}[version]
@@ -99,3 +99,9 @@ def test_legacy_tls_rejected(server_context, version):
     client.set_ciphers("DEFAULT:@SECLEVEL=0")
     with pytest.raises(ssl.SSLError):
         handshake(context, client)
+    # Positive control: prove the client can negotiate the old protocol when
+    # the server allows it, so a client-side policy cannot create a false pass.
+    context.minimum_version = context.maximum_version = version
+    context.set_ciphers("DEFAULT:@SECLEVEL=0")
+    expected = {ssl.TLSVersion.TLSv1: "TLSv1", ssl.TLSVersion.TLSv1_1: "TLSv1.1"}[version]
+    assert handshake(context, client) == (expected, expected)
