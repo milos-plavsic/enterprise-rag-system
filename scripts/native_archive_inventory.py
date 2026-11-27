@@ -160,8 +160,19 @@ def main():
     if baseline["schema"] != 1:
         raise ValueError("unknown baseline schema")
     elf, sources, links, filesystem = inventory(args.archive)
-    observed = verify_baseline(elf, sources, identity, baseline, filesystem)
-    result = {"schema": 1, "image_manifest_digest": identity["manifest_digest"],
+    try:
+        observed = verify_baseline(elf, sources, identity, baseline, filesystem)
+    except ValueError as exc:
+        # A failed gate is not a waived gate. Preserve exact evidence so that
+        # maintainers can review each changed path and reject unexpected drift.
+        failed = {"schema": 1, "accepted": False, "failure": str(exc),
+                  "expected_baseline": baseline,
+                  "observed_filesystem_entries": len(filesystem),
+                  "observed_filesystem_sha256": digest(filesystem),
+                  "effective_filesystem": filesystem}
+        args.output.write_text(json.dumps(failed, sort_keys=True, indent=2) + "\n")
+        raise
+    result = {"schema": 1, "accepted": True, "image_manifest_digest": identity["manifest_digest"],
               "archive_sha256": identity["archive_sha256"], "baseline_sha256": digest(baseline),
               "observed": observed, "elf": elf, "python_sources": sources, "links": links,
               "effective_filesystem": filesystem,
