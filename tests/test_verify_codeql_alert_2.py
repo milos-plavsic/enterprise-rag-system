@@ -350,11 +350,23 @@ class TestCodeQLPremergeProof(TestCase):
             with self.assertRaises(q.VerificationError):
                 q.pr_number_from_ref(bad)
 
-    def test_unrelated_pr_is_blocked_until_original_alert_is_fixed(self):
+    def test_alternative_pr_can_formally_remediate_open_original_alert(self):
         alert, analyses, _, _ = fixture()
-        analyses[0]["ref"] = "refs/pull/11/merge"
+        analyses[0]["ref"] = "refs/pull/12/merge"
+        self.assertEqual(
+            q.verify_premerge(alert, analyses, [], MERGE, 12),
+            (RULE, 9001),
+        )
+
+    def test_alternative_pr_with_open_original_tls_finding_is_rejected(self):
+        alert, analyses, _, _ = fixture()
+        analyses[0]["ref"] = "refs/pull/12/merge"
+        observed = [{
+            "state": "open", "rule": {"id": RULE}, "tool": {"name": "CodeQL"},
+            "most_recent_instance": {"ref": "refs/pull/12/merge"},
+        }]
         with self.assertRaises(q.VerificationError):
-            q.verify_premerge(alert, analyses, [], MERGE, 11)
+            q.verify_premerge(alert, analyses, observed, MERGE, 12)
 
     def test_future_pr_rechecks_original_rule_after_formal_fix(self):
         alert, analyses, _, _ = fixture()

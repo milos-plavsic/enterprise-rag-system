@@ -188,10 +188,10 @@ def verify_premerge(
 ) -> tuple[str, int]:
     """Require a complete exact-merge analysis and absence of the original rule."""
     rule_id = validate_original_alert(alert)
-    if pr_number != PR_NUMBER and alert.get("state") != "fixed":
-        raise VerificationError(
-            "Original CodeQL alert must be fixed before unrelated PRs can merge"
-        )
+    # Any PR can legitimately remediate the original alert. Require the
+    # original alert's rule/path and a clean, exact synthetic merge analysis,
+    # not that the fix arrived via a particular historic PR number.
+    # Formal "fixed" status is required separately on protected main only.
     ref = f"refs/pull/{pr_number}/merge"
     latest = latest_current_analysis(analyses, ref, merge_sha)
     verify_open_alerts(open_alerts, ref, rule_id)
