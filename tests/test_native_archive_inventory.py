@@ -1,5 +1,9 @@
+import io
+import json
+import tarfile
+
 import pytest
-from scripts.native_archive_inventory import consumer_paths, digest, verify_baseline, safe_name
+from scripts.native_archive_inventory import consumer_paths, digest, verify_baseline, safe_name, inventory
 
 
 def fixture():
@@ -85,3 +89,33 @@ def test_injected_site_package_cache_symlink_fails():
         "symlink", "/usr/lib/hidden", 511, 0, 0]
     with pytest.raises(ValueError, match="cache directories"):
         verify_baseline(elf, sources, identity, baseline, fs)
+
+def make_test_archive(tmp_path, layer_members):
+    layer_stream = io.BytesIO()
+    with tarfile.open(fileobj=layer_stream, mode="w", format=tarfile.PAX_FORMAT) as layer:
+        for item in layer_members:
+            blob = b"safe"
+            item.size = len(blob)
+            layer.addfile(item, io.BytesIO(blob))
+    layer_bytes = layer_stream.getvalue()
+    outer_path = tmp_path / "image.tar"
+    manifest = json.dumps([{"Layers": ["layer.tar"]}]).encode()
+    with tarfile.open(outer_path, mode="w") as outer:
+        for name, data in (("manifest.json", manifest), ("layer.tar", layer_bytes)):
+            record = tarfile.TarInfo(name)
+            record.size = len(data)
+            outer.addfile(record, io.BytesIO(data))
+    return outer_path
+
+
+def test_extended_attributes_are_rejected(tmp_path):
+    item = tarfile.TarInfo("usr/bin/tool")
+    item.pax_headers = {"SCHILY.xattr.security.capability": "unexpected"}
+    with pytest.raises(ValueError, match="extended attributes"):
+        inventory(make_test_archive(tmp_path, [item]))
+
+
+def test_duplicate_layer_paths_are_rejected(tmp_path):
+    with pytest.raises(ValueError, match="duplicate OCI layer"):
+        inventory(make_test_archive(tmp_path, [
+            tarfile.TarInfo("usr/bin/tool"), tarfile.TarInfo("usr/bin/tool")]))
