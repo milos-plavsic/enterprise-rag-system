@@ -142,16 +142,13 @@ def normalized_filesystem(files):
     pinned source files. Everything else remains content-addressed.
     """
     prefix = "usr/local/lib/python3.12/site-packages/"
-    compiled = [name for name in files if name.startswith(prefix) and
-                name.endswith((".pyc", ".pyo"))]
-    if compiled:
-        raise ValueError("Python install bytecode must be absent from the image")
+    generated = [name for name in files if name.startswith(prefix) and
+                 (name.endswith((".pyc", ".pyo")) or name.endswith("/__pycache__"))]
+    if generated:
+        raise ValueError("Python install bytecode and cache directories must be absent")
     if "var/log/apk.log" in files:
         raise ValueError("unreviewed mutable APK installation log present")
-    return {
-        name: row for name, row in files.items()
-        if not (name.startswith(prefix) and name.endswith("/__pycache__"))
-    }
+    return files
 
 
 def verify_baseline(elf, sources, identity, baseline, effective_filesystem):

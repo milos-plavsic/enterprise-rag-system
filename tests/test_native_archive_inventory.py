@@ -78,3 +78,10 @@ def test_apk_log_is_rejected():
     fs["var/log/apk.log"] = ["file", "arbitrary install log", 420, 0, 0]
     with pytest.raises(ValueError, match="APK installation log"):
         verify_baseline(elf, sources, identity, baseline, fs)
+
+def test_injected_site_package_cache_symlink_fails():
+    elf, sources, identity, baseline, fs = fixture()
+    fs["usr/local/lib/python3.12/site-packages/pkg/__pycache__"] = [
+        "symlink", "/usr/lib/hidden", 511, 0, 0]
+    with pytest.raises(ValueError, match="cache directories"):
+        verify_baseline(elf, sources, identity, baseline, fs)
