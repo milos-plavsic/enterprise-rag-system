@@ -21,10 +21,14 @@ not just the workflow filenames. Execute the validator with read-only
 repository, Actions and checks access:
 
 ```bash
-python3 verify_trusted_acceptance.py 12 --approved-head "$REVIEWED_HEAD" --approved-base "$REVIEWED_BASE"
+python3 verify_trusted_acceptance.py 12 \
+  --approved-head "$REVIEWED_HEAD" \
+  --approved-base "$REVIEWED_BASE" \
+  --trusted-reviewer-login "$TRUSTED_REVIEWER_LOGIN" \
+  --trusted-reviewer-id "$TRUSTED_REVIEWER_ID"
 ```
 
-The program checks current PR identity, merge ancestry, base protection,
+The program requires an exact-head GitHub approval from a separately authorised, non-author reviewer using both the trusted login and immutable numeric GitHub identity; newer change requests or comments invalidate that acceptance. The approved reviewer identity must be selected outside the candidate repository, and a GitHub approval cannot itself prove that an independent high-reasoning agent performed the review. The program also checks current PR identity, merge ancestry, base protection,
 expected workflow IDs and paths, actual PR association, latest attempt jobs,
 check identity and App IDs. It rejects skipped, neutral, incomplete,
 ambiguous or stale mandatory checks. Base evaluation remains evidence

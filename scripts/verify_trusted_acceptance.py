@@ -63,6 +63,60 @@ def page_all(get, path, key):
     raise ValueError("too many result pages")
 
 
+def page_list(get, path):
+    """Read GitHub list endpoints that lack total_count, rejecting duplicate IDs."""
+    rows = []
+    seen = set()
+    for page in range(1, 21):
+        sep = "&" if "?" in path else "?"
+        batch = get(path + sep + urlencode({"per_page": 100, "page": page}))
+        require(isinstance(batch, list) and len(batch) <= 100, "invalid reviewer page")
+        for review in batch:
+            require(isinstance(review, dict) and type(review.get("id")) is int
+                    and review["id"] > 0 and review["id"] not in seen,
+                    "malformed or duplicated reviewer evidence")
+            seen.add(review["id"])
+            rows.append(review)
+        if len(batch) < 100:
+            return rows
+    raise ValueError("review pagination limit exceeded")
+
+
+def review_approval(get, number, head, reviewer_login, reviewer_id, author_id):
+    """An exact-head GitHub approval from an externally designated identity.
+
+    This checks GitHub's approval record, not the reviewer's competence or
+    reasoning level. Those must be independently established off-repository.
+    """
+    require(isinstance(reviewer_login, str) and
+            re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?", reviewer_login),
+            "invalid trusted reviewer login")
+    require(type(reviewer_id) is int and reviewer_id > 0 and
+            type(author_id) is int and author_id > 0 and reviewer_id != author_id,
+            "trusted reviewer must be independent of PR author")
+    reviews = page_list(get, PREFIX + f"pulls/{number}/reviews")
+    relevant = []
+    for review in reviews:
+        user = review.get("user")
+        require(isinstance(user, dict) and type(user.get("id")) is int
+                and isinstance(user.get("login"), str), "reviewer identity missing")
+        if user["id"] == reviewer_id:
+            require(user["login"].casefold() == reviewer_login.casefold(),
+                    "trusted reviewer's GitHub identity changed")
+            relevant.append(review)
+    require(relevant, "independent reviewer has not submitted a GitHub review")
+    for review in relevant:
+        require(isinstance(review.get("submitted_at"), str) and
+                bool(re.fullmatch(r"\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ",
+                                  review["submitted_at"])),
+                "review submission timestamp missing or malformed")
+    latest = max(relevant, key=lambda row: (row["submitted_at"], row["id"]))
+    require(latest.get("state") == "APPROVED" and latest.get("commit_id") == head,
+            "trusted reviewer has not approved the exact current head")
+    return {"review_id": latest["id"], "reviewer_id": reviewer_id,
+            "reviewer_login": reviewer_login, "submitted_at": latest["submitted_at"]}
+
+
 def approved_pr(get, number, head, base):
     pull = get(PREFIX + f"pulls/{number}")
     require(pull["number"] == number and pull["state"] == "open" and not pull["draft"], "PR not ready")
@@ -79,9 +133,12 @@ def approved_pr(get, number, head, base):
     return merge
 
 
-def verify(get, number, head, base):
+def verify(get, number, head, base, reviewer_login, reviewer_id):
     require(type(number) is int and number > 0 and valid_sha(head) and valid_sha(base), "invalid trusted approval identity")
     merge = approved_pr(get, number, head, base)
+    pull = get(PREFIX + f"pulls/{number}")
+    require(isinstance(pull.get("user"), dict), "PR author identity absent")
+    approval = review_approval(get, number, head, reviewer_login, reviewer_id, pull["user"].get("id"))
     checks = page_all(get, PREFIX + f"commits/{head}/check-runs?filter=all", "check_runs")
     runs = page_all(get, PREFIX + f"actions/runs?head_sha={head}&event=pull_request", "workflow_runs")
     selected = {}
@@ -123,7 +180,11 @@ def verify(get, number, head, base):
             and codeql[0]["status"] == "completed" and codeql[0]["conclusion"] == "success",
             "missing or invalid CodeQL service check")
     require(approved_pr(get, number, head, base) == merge, "PR changed during verification")
+    require(review_approval(get, number, head, reviewer_login, reviewer_id,
+                            pull["user"]["id"]) == approval,
+            "review approval changed during verification")
     return {"repository": REPO, "pr": number, "head": head, "base": base, "merge": merge,
+            "trusted_review": approval,
             "verified_jobs": selected, "codeql_check_id": codeql[0]["id"],
             "qualification": "Execution evidence only. Independent source and policy review required."}
 
@@ -133,8 +194,14 @@ def main():
     parser.add_argument("pr", type=int)
     parser.add_argument("--approved-head", required=True)
     parser.add_argument("--approved-base", required=True)
+    parser.add_argument("--trusted-reviewer-login", required=True,
+                        help="Externally authorised reviewer; never source this value from the PR")
+    parser.add_argument("--trusted-reviewer-id", required=True, type=int,
+                        help="Immutable GitHub numeric user ID from the independent approval record")
     args = parser.parse_args()
-    print(json.dumps(verify(api, args.pr, args.approved_head, args.approved_base), sort_keys=True, indent=2))
+    print(json.dumps(verify(api, args.pr, args.approved_head, args.approved_base,
+                            args.trusted_reviewer_login, args.trusted_reviewer_id),
+                     sort_keys=True, indent=2))
 
 
 if __name__ == "__main__":
