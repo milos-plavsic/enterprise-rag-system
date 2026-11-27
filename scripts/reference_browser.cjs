@@ -18,15 +18,32 @@ const project = process.env.RAG_LAB_PROJECT;
 assert.match(project || '', /^juniper-reference-[a-f0-9]{12}$/);
 const prefix = ['compose', '--env-file', path.join(directory, 'compose.env'), '-p', project, '-f', 'compose.production.yml', '-f', 'compose.reference.yml'];
 function docker(args, capture = false, input) {
-  const result = spawnSync('docker', [...prefix, ...args], {stdio: [input === undefined ? 'ignore' : 'pipe',capture ? 'pipe' : 'inherit','inherit'], input, encoding:'utf8',timeout:90000});
-  assert.equal(result.status, 0, `compose command failed: ${args[0]}`);
+  // Supervise Docker Compose and its descendant processes as a group.
+  // Node's spawnSync timeout alone can leave inherited stdio pipes open.
+  const cmd = ['--signal=TERM','--kill-after=10s','90s','docker',...prefix,...args];
+  const result = spawnSync('timeout', cmd, {
+    stdio: [input === undefined ? 'ignore' : 'pipe',
+      capture ? 'pipe' : 'inherit','inherit'],
+    input, encoding:'utf8',timeout:110000,killSignal:'SIGKILL',
+  });
+  assert.equal(result.status,0,
+    `compose command failed: ${args[0]} (exit=${result.status}, signal=${result.signal || 'none'}, error=${result.error?.code || 'none'})`);
   return result.stdout;
 }
 const compose = (...args) => docker(args);
-const admin = (...args) => compose('run', '--rm', '--no-deps', 'api', 'python', 'production_admin.py', ...args);
+// Use the running container for live administration to prevent creating
+// ephemeral Docker network interfaces during Chromium security checks.
+const admin = (...args) => compose('exec','-T','api','python','production_admin.py',...args);
+const offlineAdmin = (...args) => compose('run','--rm','--no-deps','api','python','production_admin.py',...args);
 const publish = release => {
-  assert.equal(spawnSync('python3', ['reference/corpus.py', path.join(directory, 'source'), String(release)], {stdio:'inherit'}).status, 0);
+  console.log(`PHASE: publishing source release ${release}`);
+  const result = spawnSync('python3', ['reference/corpus.py',
+    path.join(directory, 'source'), String(release)], {
+    stdio:'inherit',timeout:30000,killSignal:'SIGKILL',
+  });
+  assert.equal(result.status,0,'source publication failed or timed out');
   admin('sync-source', '/lab/source');
+  console.log(`PHASE: indexed source release ${release}`);
 };
 const isIdpAuth = url => url.origin === idpOrigin &&
   url.pathname === idpRealm + '/protocol/openid-connect/auth';
@@ -435,10 +452,10 @@ function browserHome(name, trusted) {
     await expectCitationAfterSignIn(page,'robin',currentLink,404,'This passage is unavailable.');
     publish(3);
     compose('stop','api');
-    admin('--database','/var/lib/rag/lab-backup.sqlite3','quarantine-restored-grants');
+    offlineAdmin('--database','/var/lib/rag/lab-backup.sqlite3','quarantine-restored-grants');
     // Reconcile withdrawals before activating an older snapshot.
-    admin('--database','/var/lib/rag/lab-backup.sqlite3','sync-source','/lab/source');
-    admin('activate-restore','/var/lib/rag/lab-backup.sqlite3');
+    offlineAdmin('--database','/var/lib/rag/lab-backup.sqlite3','sync-source','/lab/source');
+    offlineAdmin('activate-restore','/var/lib/rag/lab-backup.sqlite3');
     compose('up','-d','api');
     await waitForStatus('/ready',200,90000);
     page = await fresh();
