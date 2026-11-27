@@ -104,7 +104,8 @@ function Assert-BranchProtectionMatchesPolicy {
     Assert-NoActors "pull-request bypass allowances" (Get-OptionalPropertyValue $ActualReviews "bypass_pull_request_allowances")
 
     if ($null -eq $Expected.restrictions) {
-        if ($null -ne $Actual.restrictions) {
+        $ActualRestrictions = Get-OptionalPropertyValue $Actual "restrictions"
+        if ($null -ne $ActualRestrictions) {
             throw "Verification failed: push restrictions exist although canonical policy requires none."
         }
     }
