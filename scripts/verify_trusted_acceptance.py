@@ -11,7 +11,7 @@ import argparse
 import json
 import re
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
 REPO = "milos-plavsic/enterprise-rag-system"
@@ -125,8 +125,9 @@ def review_approval(get, number, head, reviewer_login, reviewer_id, author_id):
     latest = max(relevant, key=lambda row: (row["submitted_at"], row["id"]))
     require(latest.get("state") == "APPROVED" and latest.get("commit_id") == head,
             "trusted reviewer has not approved the exact current head")
-    return {"review_id": latest["id"], "reviewer_id": reviewer_id,
-            "reviewer_login": reviewer_login, "submitted_at": latest["submitted_at"]}
+    # Never echo trusted reviewer login/ID supplied through the external CLI.
+    # The independent runner already has them in its protected approval record.
+    return {"review_id": latest["id"], "submitted_at": latest["submitted_at"]}
 
 
 def approved_pr(get, number, head, base):

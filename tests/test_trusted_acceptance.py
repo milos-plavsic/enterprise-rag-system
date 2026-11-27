@@ -147,8 +147,7 @@ def test_trusted_reviewer_review_is_reported():
     get, *_ = fixture()
     result = verify(get, 10, HEAD, BASE, REVIEWER_LOGIN, REVIEWER_ID)
     assert result["trusted_review"] == {
-        "review_id": 800, "reviewer_id": REVIEWER_ID,
-        "reviewer_login": REVIEWER_LOGIN, "submitted_at": "2026-11-27T14:00:00Z"}
+        "review_id": 800, "submitted_at": "2026-11-27T14:00:00Z"}
 
 
 @pytest.mark.parametrize("timestamp", [

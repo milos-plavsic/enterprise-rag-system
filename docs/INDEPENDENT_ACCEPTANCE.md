@@ -58,3 +58,5 @@ References: [GitHub ruleset workflow rules](https://docs.github.com/en/enterpris
 ## PR identity boundary
 
 The original TLS PR is #10; the remediation candidate is PR #12. Independent approval must bind the exact PR #12 head and base to independently controlled evidence. Passing candidate-defined Actions checks does not authorize merging a draft PR.
+
+The verifier's stdout deliberately does not repeat the external reviewer's login or numeric account ID; the trusted caller retains those values privately and correlates the returned GitHub review ID. This prevents review-identity configuration supplied as CLI input from leaking to potentially public Actions logs.
