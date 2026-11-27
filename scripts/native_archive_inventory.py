@@ -160,17 +160,25 @@ def normalized_filesystem(files):
     return files
 
 
-def verify_baseline(elf, sources, identity, baseline, effective_filesystem):
-    direct, transitive = consumer_paths(elf)
+def observed_baseline(elf, sources, identity, effective_filesystem):
+    direct, _ = consumer_paths(elf)
     effective = normalized_filesystem(effective_filesystem)
-    observed = {"elf_count": len(elf), "elf_inventory_sha256": digest({p: x["sha256"] for p, x in elf.items()}),
-                "python_source_count": len(sources), "python_inventory_sha256": digest(sources),
-                "application_source_sha256": identity["source_tree_sha256"], "direct_consumers": direct,
-                "effective_filesystem_entries": len(effective),
-                "effective_filesystem_sha256": digest(effective)}
-    for key, value in observed.items():
-        if baseline.get(key) != value:
-            raise ValueError(f"native review baseline drift: {key}")
+    return {"elf_count": len(elf),
+            "elf_inventory_sha256": digest({p: x["sha256"] for p, x in elf.items()}),
+            "python_source_count": len(sources),
+            "python_inventory_sha256": digest(sources),
+            "application_source_sha256": identity["source_tree_sha256"],
+            "direct_consumers": direct,
+            "effective_filesystem_entries": len(effective),
+            "effective_filesystem_sha256": digest(effective)}
+
+
+def verify_baseline(elf, sources, identity, baseline, effective_filesystem):
+    observed = observed_baseline(elf, sources, identity, effective_filesystem)
+    mismatches = [key for key, value in observed.items() if baseline.get(key) != value]
+    if mismatches:
+        raise ValueError("native review baseline drift: " + ", ".join(mismatches))
+    _, transitive = consumer_paths(elf)
     return {**observed, "transitive_consumers": transitive}
 
 
@@ -190,14 +198,22 @@ def main():
     try:
         observed = verify_baseline(elf, sources, identity, baseline, filesystem)
     except ValueError as exc:
-        # A failed gate is not a waived gate. Preserve exact evidence so that
-        # maintainers can review each changed path and reject unexpected drift.
+        # A failed gate is not a waived gate. Preserve the complete observed
+        # baseline as well as the filesystem evidence so a reviewer can assess
+        # every drift dimension rather than approving an inferred replacement.
+        try:
+            diagnostic_observed = observed_baseline(elf, sources, identity, filesystem)
+        except ValueError:
+            diagnostic_observed = None
         failed = {"schema": 1, "accepted": False, "failure": str(exc),
                   "expected_baseline": baseline,
+                  "observed_baseline": diagnostic_observed,
                   "observed_filesystem_entries": len(filesystem),
                   "observed_filesystem_sha256": digest(filesystem),
                   "effective_filesystem": filesystem}
         args.output.write_text(json.dumps(failed, sort_keys=True, indent=2) + "\n")
+        if diagnostic_observed is not None:
+            print("OBSERVED BASELINE: " + json.dumps(diagnostic_observed, sort_keys=True))
         raise
     result = {"schema": 1, "accepted": True, "image_manifest_digest": identity["manifest_digest"],
               "archive_sha256": identity["archive_sha256"], "baseline_sha256": digest(baseline),
