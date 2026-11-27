@@ -133,12 +133,22 @@ def identity(build: dict, report: dict, expected_ref: str, archive_receipt: dict
 
     build_manifest = _optional_digest(
         build.get("containerimage.digest"), "Buildx manifest digest")
-    if build_manifest is not None and build_manifest != canonical_manifest:
-        raise ValueError("Buildx manifest differs from archived OCI manifest")
+    # --load and docker save may encode different OCI/Docker manifest bytes.
+    # Their digests MUST remain distinct. A conversion is accepted only if
+    # Buildx and the independently verified saved archive have the exact same
+    # image-config digest, which cryptographically commits to rootfs diff IDs.
+    representation_changed = build_manifest is not None and build_manifest != canonical_manifest
+    if representation_changed and build_config != config:
+        raise ValueError("Buildx/exporter manifest conversion lacks matching config evidence")
     descriptor = build.get("containerimage.descriptor")
     if descriptor is not None:
         if not isinstance(descriptor, dict):
             raise ValueError("invalid Buildx descriptor")
+        if descriptor.get("mediaType") not in {
+            "application/vnd.oci.image.manifest.v1+json",
+            "application/vnd.docker.distribution.manifest.v2+json",
+        }:
+            raise ValueError("unexpected Buildx manifest media type")
         descriptor_digest = _optional_digest(
             descriptor.get("digest"), "Buildx descriptor digest")
         if (descriptor_digest is not None and build_manifest is not None
@@ -203,6 +213,7 @@ def identity(build: dict, report: dict, expected_ref: str, archive_receipt: dict
         "runtime_config": archive_receipt["runtime_config"],
         "config_digest": config,
         "buildx_manifest_digest": build_manifest,
+        "buildx_archive_representation_changed": representation_changed,
         "buildx_config_digest": build_config,
         "buildx_media_type": (
             descriptor.get("mediaType") if isinstance(descriptor, dict) else None

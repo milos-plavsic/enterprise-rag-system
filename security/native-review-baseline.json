@@ -20,5 +20,7 @@
     "usr/lib/ossl-modules/legacy.so",
     "usr/local/lib/python3.12/lib-dynload/_hashlib.cpython-312-x86_64-linux-musl.so",
     "usr/local/lib/python3.12/lib-dynload/_ssl.cpython-312-x86_64-linux-musl.so"
-  ]
+  ],
+  "effective_filesystem_entries": 6413,
+  "effective_filesystem_sha256": "daaae5b8c369b6c818e86ff08078612133bb41260cc2857db32bfe1ef8b3f51f"
 }

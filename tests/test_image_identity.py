@@ -165,11 +165,24 @@ def test_unsafe_archive_member_rejected(tmp_path):
     with pytest.raises(ValueError, match="unsafe"):
         archive_identity(path, REF)
 
-def test_buildx_manifest_must_match_actual_archive_manifest(tmp_path):
+def test_buildx_manifest_conversion_needs_shared_config(tmp_path):
     metadata = build()
     metadata["containerimage.digest"] = "sha256:" + "a" * 64
     metadata["containerimage.descriptor"]["digest"] = metadata["containerimage.digest"]
-    with pytest.raises(ValueError, match="Buildx manifest differs"):
+    archive = archive_identity(docker_archive(tmp_path), REF)
+    verified = identity(metadata, report(), REF, archive)
+    assert verified["buildx_archive_representation_changed"] is True
+    assert verified["manifest_digest"] != verified["buildx_manifest_digest"]
+    assert verified["buildx_config_digest"] == verified["config_digest"]
+    del metadata["containerimage.config.digest"]
+    with pytest.raises(ValueError, match="matching config evidence"):
+        identity(metadata, report(), REF, archive)
+
+
+def test_untrusted_buildx_media_type_fails(tmp_path):
+    metadata = build()
+    metadata["containerimage.descriptor"]["mediaType"] = "application/x-untrusted"
+    with pytest.raises(ValueError, match="media type"):
         identity(metadata, report(), REF, archive_identity(docker_archive(tmp_path), REF))
 
 

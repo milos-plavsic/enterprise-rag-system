@@ -50,9 +50,9 @@ def inspect_elf(data):
 
 
 def inventory(archive):
-    elf, sources, links = {}, {}, {}
+    elf, sources, links, effective_filesystem = {}, {}, {}, {}
     def remove(path, children=False):
-        for table in (elf, sources, links):
+        for table in (elf, sources, links, effective_filesystem):
             for key in list(table):
                 if key == path or children and key.startswith(path + "/"):
                     del table[key]
@@ -69,7 +69,7 @@ def inventory(archive):
                     path = safe_name(member.name)
                     parent, _, base = path.rpartition("/")
                     if base == ".wh..wh..opq":
-                        for table in (elf, sources, links):
+                        for table in (elf, sources, links, effective_filesystem):
                             for key in list(table):
                                 if key.startswith(parent + "/"):
                                     del table[key]
@@ -77,14 +77,20 @@ def inventory(archive):
                         remove((parent + "/" if parent else "") + base[4:], True)
                 for member in members:
                     path = safe_name(member.name)
-                    if PurePosixPath(path).name.startswith(".wh.") or member.isdir():
+                    if PurePosixPath(path).name.startswith(".wh."):
+                        continue
+                    if member.isdir():
+                        effective_filesystem[path] = ("directory", None, member.mode, member.uid, member.gid)
                         continue
                     remove(path, not member.isfile())
+                    metadata = (member.mode, member.uid, member.gid)
                     if member.issym():
                         links[path] = {"type": "symlink", "target": member.linkname}
+                        effective_filesystem[path] = ("symlink", member.linkname, *metadata)
                     elif member.islnk():
                         target = safe_name(member.linkname)
                         links[path] = {"type": "hardlink", "target": target}
+                        effective_filesystem[path] = ("hardlink", member.linkname, *metadata)
                         if target in elf:
                             elf[path] = elf[target]
                         if target in sources and path.startswith(PYTHON_PREFIX) and path.endswith(".py"):
@@ -100,13 +106,20 @@ def inventory(archive):
                                 data = magic + stream.read()
                                 if len(data) != member.size:
                                     raise ValueError("incomplete file")
+                                content_digest = hashlib.sha256(data).hexdigest()
                                 if magic == b"\x7fELF":
                                     elf[path] = inspect_elf(data)
                                 if path.startswith(PYTHON_PREFIX) and path.endswith(".py"):
-                                    sources[path] = hashlib.sha256(data).hexdigest()
+                                    sources[path] = content_digest
+                            else:
+                                hasher = hashlib.sha256(magic)
+                                for block in iter(lambda: stream.read(1024 * 1024), b""):
+                                    hasher.update(block)
+                                content_digest = hasher.hexdigest()
+                        effective_filesystem[path] = ("file", content_digest, *metadata)
                     else:
                         raise ValueError("unexpected special layer member")
-    return elf, sources, links
+    return elf, sources, links, effective_filesystem
 
 
 def consumer_paths(elf):
@@ -121,11 +134,13 @@ def consumer_paths(elf):
         reached = expanded
 
 
-def verify_baseline(elf, sources, identity, baseline):
+def verify_baseline(elf, sources, identity, baseline, effective_filesystem):
     direct, transitive = consumer_paths(elf)
     observed = {"elf_count": len(elf), "elf_inventory_sha256": digest({p: x["sha256"] for p, x in elf.items()}),
                 "python_source_count": len(sources), "python_inventory_sha256": digest(sources),
-                "application_source_sha256": identity["source_tree_sha256"], "direct_consumers": direct}
+                "application_source_sha256": identity["source_tree_sha256"], "direct_consumers": direct,
+                "effective_filesystem_entries": len(effective_filesystem),
+                "effective_filesystem_sha256": digest(effective_filesystem)}
     for key, value in observed.items():
         if baseline.get(key) != value:
             raise ValueError(f"native review baseline drift: {key}")
@@ -144,11 +159,12 @@ def main():
     baseline = json.loads(args.baseline.read_bytes())
     if baseline["schema"] != 1:
         raise ValueError("unknown baseline schema")
-    elf, sources, links = inventory(args.archive)
-    observed = verify_baseline(elf, sources, identity, baseline)
+    elf, sources, links, filesystem = inventory(args.archive)
+    observed = verify_baseline(elf, sources, identity, baseline, filesystem)
     result = {"schema": 1, "image_manifest_digest": identity["manifest_digest"],
               "archive_sha256": identity["archive_sha256"], "baseline_sha256": digest(baseline),
               "observed": observed, "elf": elf, "python_sources": sources, "links": links,
+              "effective_filesystem": filesystem,
               "limitation": "Static linkage and exact code inventory; not proof of dynamic reachability."}
     args.output.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
     print("VERIFIED: native and dependency source inventories match review baseline")
