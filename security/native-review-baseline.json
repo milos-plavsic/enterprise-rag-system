@@ -1,7 +1,6 @@
 {
   "schema": 1,
-  "reference_commit": "55fa83dc3a64065df59769f9b14289d0d9293f4a",
-  "reference_archive_artifact_sha256": "af8300ff93a98c659f1e34977b986062f9ed920efe31a509a2993d1df8173224",
+  "reference_commit": "a84813c5538436b4f24365532523e01aa70d103f",
   "elf_count": 162,
   "elf_inventory_sha256": "c9cce2622c96cab8e428973b1d385fba24abef9832f4295866c9db6c5accc135",
   "python_source_count": 2052,
@@ -22,5 +21,8 @@
     "usr/local/lib/python3.12/lib-dynload/_ssl.cpython-312-x86_64-linux-musl.so"
   ],
   "effective_filesystem_entries": 5283,
-  "effective_filesystem_sha256": "70a70681296ed81444d2bbcaf200d7ec5266abd2e559e2e6df544b81b4fe0630"
+  "effective_filesystem_sha256": "16c33912cb6fb44ff490d1ba78da9ade1559f4a393a5a91f7dbae4eda4b1c50f",
+  "reviewed_previous_archive_artifact_sha256": "af8300ff93a98c659f1e34977b986062f9ed920efe31a509a2993d1df8173224",
+  "reference_diagnostic_artifact_id": 15206392126,
+  "reference_diagnostic_artifact_sha256": "sha256:68831865e510109b60ce7d4d36dcdc5648b16643db2ad671f7bf5632ac344e95"
 }
