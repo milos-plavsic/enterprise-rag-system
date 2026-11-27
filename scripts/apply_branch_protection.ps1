@@ -221,6 +221,10 @@ if ($SelfTest) {
         }
     }
 
+    $OmittedNullFixture = $Fixture | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $OmittedNullFixture.PSObject.Properties.Remove("restrictions")
+    Assert-BranchProtectionMatchesPolicy $Expected $OmittedNullFixture $BranchFixture
+
     $UnprotectedBranch = [pscustomobject]@{ protected = $false }
     $Rejected = $false
     try {
