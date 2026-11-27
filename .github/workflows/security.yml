@@ -31,6 +31,7 @@ jobs:
   codeql:
     name: CodeQL (Python)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       security-events: write
       contents: read
@@ -38,15 +39,44 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-      - uses: github/codeql-action/init@5895b2c9be147bc7f1c75ce72c5cb577febb1907 # v4
+      - id: codeql_init
+        uses: github/codeql-action/init@5895b2c9be147bc7f1c75ce72c5cb577febb1907 # v4
         with:
           languages: python
       - uses: github/codeql-action/analyze@5895b2c9be147bc7f1c75ce72c5cb577febb1907 # v4
+        with:
+          output: ${{ runner.temp }}/rag-codeql-results
+      - name: Prove original query detects historical defect but not current source
+        env:
+          CODEQL: ${{ steps.codeql_init.outputs.codeql-path }}
+        run: |
+          set -euo pipefail
+          test -x "$CODEQL"
+          sandbox=$(mktemp -d "$RUNNER_TEMP/rag-codeql-control.XXXXXX")
+          mkdir "$sandbox/src"
+          # Fetch only the immutable historical source revision, without changing checkout.
+          original=5d2660b8b56ae2f2f1139b310075531f5e53307a
+          git fetch --no-tags --depth=1 https://github.com/milos-plavsic/enterprise-rag-system.git "$original"
+          test "$(git rev-parse FETCH_HEAD)" = "$original"
+          git show "$original:scripts/smoke_idp.py" > "$sandbox/src/original.py"
+          cp scripts/smoke_idp.py "$sandbox/src/remediated.py"
+          "$CODEQL" database create "$sandbox/db" --language=python --build-mode=none --source-root="$sandbox/src"
+          "$CODEQL" database analyze "$sandbox/db" codeql/python-queries:Security/CWE-327/InsecureProtocol.ql \
+            --format=sarifv2.1.0 --output="$RUNNER_TEMP/rag-control.sarif" --threads=2 --ram=4096
+          python3 scripts/verify_codeql_sarif.py "$RUNNER_TEMP/rag-codeql-results/python.sarif" "$RUNNER_TEMP/rag-control.sarif"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: codeql-query-evidence-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/rag-codeql-results/python.sarif
+            ${{ runner.temp }}/rag-control.sarif
+          if-no-files-found: error
 
   codeql_original_alert:
     name: "CodeQL original TLS regression gate"
     needs: codeql
-    if: github.event_name == 'pull_request'
+    if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     permissions:
@@ -59,6 +89,10 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
+      - name: Require successful CodeQL job including query evidence
+        env:
+          CODEQL_RESULT: ${{ needs.codeql.result }}
+        run: test "$CODEQL_RESULT" = success
       - name: Verify original TLS rule absent in exact PR CodeQL analysis
         env:
           GH_TOKEN: ${{ github.token }}
@@ -67,7 +101,7 @@ jobs:
   codeql_original_alert_main:
     name: "CodeQL alert #2 fixed on main"
     needs: codeql
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     permissions:
@@ -80,6 +114,10 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
+      - name: Require successful CodeQL job including query evidence
+        env:
+          CODEQL_RESULT: ${{ needs.codeql.result }}
+        run: test "$CODEQL_RESULT" = success
       - name: Verify alert #2 is formally fixed on protected main
         env:
           GH_TOKEN: ${{ github.token }}

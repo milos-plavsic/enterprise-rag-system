@@ -18,7 +18,8 @@ def fixture():
     }
     current = [{
         "ref": REF, "commit_sha": MERGE, "tool": {"name": "CodeQL"},
-        "error": "", "warning": "", "rules_count": 320, "id": 9001,
+        "analysis_key": q.ANALYSIS_KEY, "category": q.ANALYSIS_KEY + "/",
+            "error": "", "warning": "", "rules_count": 320, "id": 9001,
     }]
     pull = {
         "number": 10, "merge_commit_sha": None, "state": "open",
@@ -58,6 +59,19 @@ class TestCodeQLPremergeProof(TestCase):
     def test_wrong_analysis_tool_fails(self):
         alert, analyses, _, _ = fixture()
         analyses[0]["tool"]["name"] = "OtherScanner"
+        with self.assertRaises(q.VerificationError):
+            q.verify_premerge(alert, analyses, [], MERGE)
+
+    def test_wrong_analysis_workflow_or_category_fails(self):
+        for field in ("analysis_key", "category"):
+            alert, analyses, _, _ = fixture()
+            analyses[0][field] = ".github/workflows/other.yml:codeql"
+            with self.assertRaises(q.VerificationError):
+                q.verify_premerge(alert, analyses, [], MERGE)
+
+    def test_wrong_original_rule_fails(self):
+        alert, analyses, _, _ = fixture()
+        alert["rule"]["id"] = "py/unrelated"
         with self.assertRaises(q.VerificationError):
             q.verify_premerge(alert, analyses, [], MERGE)
 
@@ -243,6 +257,7 @@ class TestCodeQLPremergeProof(TestCase):
         alert["fixed_at"] = "2026-11-26T12:00:00Z"
         analyses = [{
             "ref": q.MAIN_REF, "commit_sha": MERGE, "tool": {"name": "CodeQL"},
+            "analysis_key": q.ANALYSIS_KEY, "category": q.ANALYSIS_KEY + "/",
             "error": "", "warning": "", "rules_count": 320, "id": 9002,
             "created_at": "2026-11-26T12:00:00Z",
         }]
@@ -255,6 +270,7 @@ class TestCodeQLPremergeProof(TestCase):
         alert, _, _, _ = fixture()
         analyses = [{
             "ref": q.MAIN_REF, "commit_sha": MERGE, "tool": {"name": "CodeQL"},
+            "analysis_key": q.ANALYSIS_KEY, "category": q.ANALYSIS_KEY + "/",
             "error": "", "warning": "", "rules_count": 320, "id": 9002,
         }]
         with self.assertRaises(q.VerificationError):
@@ -266,6 +282,7 @@ class TestCodeQLPremergeProof(TestCase):
         alert["fixed_at"] = None
         analyses = [{
             "ref": q.MAIN_REF, "commit_sha": MERGE, "tool": {"name": "CodeQL"},
+            "analysis_key": q.ANALYSIS_KEY, "category": q.ANALYSIS_KEY + "/",
             "error": "", "warning": "", "rules_count": 320, "id": 9002,
         }]
         with self.assertRaises(q.VerificationError):
@@ -277,6 +294,7 @@ class TestCodeQLPremergeProof(TestCase):
         alert["fixed_at"] = "2026-11-26T12:00:00Z"
         analyses = [{
             "ref": q.MAIN_REF, "commit_sha": MERGE, "tool": {"name": "CodeQL"},
+            "analysis_key": q.ANALYSIS_KEY, "category": q.ANALYSIS_KEY + "/",
             "error": "", "warning": "", "rules_count": 320, "id": 9002,
         }]
         opened = [{
@@ -292,6 +310,7 @@ class TestCodeQLPremergeProof(TestCase):
         alert["fixed_at"] = "2026-11-26T12:00:00Z"
         analyses = [{
             "ref": q.MAIN_REF, "commit_sha": MERGE, "tool": {"name": "CodeQL"},
+            "analysis_key": q.ANALYSIS_KEY, "category": q.ANALYSIS_KEY + "/",
             "error": "", "warning": "", "rules_count": 320, "id": 9002,
         }]
         with mock.patch.object(
@@ -310,6 +329,7 @@ class TestCodeQLPremergeProof(TestCase):
         fixed["fixed_at"] = "2026-11-26T12:00:00Z"
         analyses = [{
             "ref": q.MAIN_REF, "commit_sha": MERGE, "tool": {"name": "CodeQL"},
+            "analysis_key": q.ANALYSIS_KEY, "category": q.ANALYSIS_KEY + "/",
             "error": "", "warning": "", "rules_count": 320, "id": 9002,
         }]
         with mock.patch.object(

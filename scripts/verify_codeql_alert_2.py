@@ -28,6 +28,9 @@ import urllib.request
 REPO = "milos-plavsic/enterprise-rag-system"
 PR_NUMBER = 10
 ALERT_NUMBER = 2
+ORIGINAL_RULE = "py/insecure-protocol"
+ANALYSIS_KEY = ".github/workflows/security.yml:codeql"
+ANALYSIS_CATEGORIES = {ANALYSIS_KEY, ANALYSIS_KEY + "/", ANALYSIS_KEY + "/language:python"}
 MAIN_REF = "refs/heads/main"
 MAX_ATTEMPTS = 18
 DELAY_SECONDS = 5
@@ -123,8 +126,8 @@ def validate_original_alert(alert: object) -> str:
     if location.get("path") != "scripts/smoke_idp.py":
         raise VerificationError("Original alert path no longer matches TLS fixture")
     rule_id = (alert.get("rule") or {}).get("id")
-    if not isinstance(rule_id, str) or not rule_id:
-        raise VerificationError("Original CodeQL rule identity missing")
+    if rule_id != ORIGINAL_RULE:
+        raise VerificationError("Original CodeQL rule identity differs")
     return rule_id
 
 
@@ -136,6 +139,8 @@ def latest_current_analysis(analyses: object, ref: str, sha: str) -> dict:
         and a.get("ref") == ref
         and a.get("commit_sha") == sha
         and (a.get("tool") or {}).get("name") == "CodeQL"
+        and a.get("analysis_key") == ANALYSIS_KEY
+        and a.get("category") in ANALYSIS_CATEGORIES
     ]
     if not current:
         raise VerificationError("Exact-commit CodeQL analysis not indexed")
