@@ -155,9 +155,12 @@ def identity(build: dict, report: dict, expected_ref: str, archive_receipt: dict
             raise ValueError("unexpected Buildx manifest media type")
         descriptor_digest = _optional_digest(
             descriptor.get("digest"), "Buildx descriptor digest")
-        if (descriptor_digest is not None and reported_digest is not None
-                and descriptor_digest != reported_digest):
-            raise ValueError("Buildx descriptor and reported image digests differ")
+        # A manifest-typed descriptor must identify the exact verified
+        # archive manifest; it cannot masquerade as a config digest. An
+        # exporter that rewrites its manifest without providing verifiable
+        # bytes must not be used as evidence for this sealed archive.
+        if descriptor_digest is not None and descriptor_digest != canonical_manifest:
+            raise ValueError("Buildx manifest descriptor does not identify verified archive manifest")
         annotations = descriptor.get("annotations")
         if annotations is not None and not isinstance(annotations, dict):
             raise ValueError("invalid Buildx descriptor annotations")

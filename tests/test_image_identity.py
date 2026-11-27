@@ -166,7 +166,7 @@ def test_unsafe_archive_member_rejected(tmp_path):
 def test_buildx_load_reports_config_digest_not_manifest(tmp_path):
     metadata = build()
     metadata["containerimage.digest"] = CONFIG
-    metadata["containerimage.descriptor"]["digest"] = CONFIG
+    metadata.pop("containerimage.descriptor")
     archive = archive_identity(docker_archive(tmp_path), REF)
     receipt = identity(metadata, report(), REF, archive)
     assert receipt["buildx_exporter_digest_kind"] == "config"
@@ -206,3 +206,10 @@ def test_daemon_image_binding_rejects_drift(field):
         image["Architecture"] = "arm64"
     with pytest.raises(ValueError):
         verify_daemon_image([image], receipt)
+
+def test_manifest_descriptor_must_match_verified_archive_bytes(tmp_path):
+    metadata = build()
+    metadata["containerimage.digest"] = CONFIG
+    metadata["containerimage.descriptor"]["digest"] = CONFIG
+    with pytest.raises(ValueError, match="manifest descriptor"):
+        identity(metadata, report(), REF, archive_identity(docker_archive(tmp_path), REF))
